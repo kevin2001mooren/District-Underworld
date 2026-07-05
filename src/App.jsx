@@ -20,6 +20,14 @@ const getEmailRedirectUrl = () => {
 const ADMIN_EMAILS = ['kevin2001mooren@gmail.com'];
 const VALID_ROLES = ['admin', 'moderator', 'helper', 'lid'];
 const STAFF_ROLES = ['admin', 'moderator', 'helper'];
+const PRISON_BRIBE_BASE_COST = 500;
+const PRISON_BRIBE_COST_PER_SECOND = 75;
+const PRISON_ESCAPE_NERVE_COST = 5;
+const PRISON_ESCAPE_SUCCESS_CHANCE = 0.35;
+const PRISON_RESCUE_NERVE_COST = 5;
+const ADMIN_JAIL_SECONDS = 60;
+const ENERGY_RECOVERY_INTERVAL_SECONDS = 60;
+const NERVE_RECOVERY_INTERVAL_SECONDS = 300;
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const NAV_TABS = ['overzicht', 'mijn items', 'woning', 'stad', 'misdaad', 'sporten', 'reizen'];
@@ -50,6 +58,13 @@ export default function App() {
   const [adminMembers, setAdminMembers] = useState([]);
   const [adminLoading, setAdminLoading] = useState(false);
   const [adminActionLoadingId, setAdminActionLoadingId] = useState(null);
+  const [rankMenuOpenId, setRankMenuOpenId] = useState(null);
+  const [cityMenuOpen, setCityMenuOpen] = useState(false);
+  const [prisonMembers, setPrisonMembers] = useState([]);
+  const [prisonLoading, setPrisonLoading] = useState(false);
+  const [prisonActionLoadingId, setPrisonActionLoadingId] = useState(null);
+  const [prisonActionWarning, setPrisonActionWarning] = useState('');
+  const [recoveryTimers, setRecoveryTimers] = useState({ energy: null, nerve: null });
 
   const normalizeRole = (value) => {
     const roleValue = (value || '').toString().trim().toLowerCase();
@@ -122,18 +137,47 @@ export default function App() {
 
   // Jail Timer countdown logic
   useEffect(() => {
-    if (jailTime <= 0) return;
+    if (!stats?.jail_until) {
+      if (jailTime !== 0) setJailTime(0);
+      return;
+    }
+
+    const computeRemainingSeconds = () => {
+      const msRemaining = new Date(stats.jail_until).getTime() - Date.now();
+      return Math.max(0, Math.ceil(msRemaining / 1000));
+    };
+
+    setJailTime(computeRemainingSeconds());
+
     const interval = setInterval(() => {
-      setJailTime(prev => {
-        if (prev <= 1) {
-          addLog("🔓 Je hebt je straf uitgezeten! Je bent weer een vrij man.", "success");
-          return 0;
-        }
-        return prev - 1;
-      });
+      const remaining = computeRemainingSeconds();
+      setJailTime(remaining);
+      if (remaining <= 0) {
+        setStats(prev => (prev ? { ...prev, jail_until: null } : prev));
+      }
     }, 1000);
+
     return () => clearInterval(interval);
-  }, [jailTime]);
+  }, [stats?.jail_until, jailTime]);
+
+  useEffect(() => {
+    if (!user) return;
+
+    const syncOwnJailStatus = async () => {
+      const { data } = await supabase
+        .from('player_stats')
+        .select('jail_until')
+        .eq('id', user.id)
+        .maybeSingle();
+
+      if (data && stats && data.jail_until !== stats.jail_until) {
+        setStats(prev => (prev ? { ...prev, jail_until: data.jail_until } : prev));
+      }
+    };
+
+    const interval = setInterval(syncOwnJailStatus, 5000);
+    return () => clearInterval(interval);
+  }, [user, stats]);
 
   useEffect(() => {
     if (currentView !== 'online-members' || !user) return;
@@ -144,7 +188,7 @@ export default function App() {
 
       const { data, error } = await supabase
         .from('player_stats')
-        .select('id, username, level, gender, cash, strength, xp, last_updated')
+        .select('id, username, level, gender, cash, strength, xp, last_updated, jail_until')
         .gte('last_updated', fiveMinutesAgo)
         .order('last_updated', { ascending: false });
 
@@ -183,6 +227,30 @@ export default function App() {
     return normalized.charAt(0).toUpperCase() + normalized.slice(1);
   };
 
+  const formatCountdown = (totalSeconds) => {
+    if (typeof totalSeconds !== 'number' || totalSeconds <= 0) return '00:00';
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+  };
+
+  const calculatePrisonBribeCost = (remainingJailSeconds) => {
+    const safeSeconds = Math.max(0, Number(remainingJailSeconds) || 0);
+    return PRISON_BRIBE_BASE_COST + safeSeconds * PRISON_BRIBE_COST_PER_SECOND;
+  };
+
+  const getRemainingJailSeconds = (jailUntilValue) => {
+    if (!jailUntilValue) return 0;
+    const msRemaining = new Date(jailUntilValue).getTime() - Date.now();
+    return Math.max(0, Math.ceil(msRemaining / 1000));
+  };
+
+  const calculateRescueChance = (remainingJailSeconds) => {
+    const penaltySteps = Math.floor(Math.max(0, remainingJailSeconds) / 30);
+    const chance = 0.6 - penaltySteps * 0.05;
+    return Math.max(0.1, Math.min(0.6, chance));
+  };
+
   // Fetch or initialize player stats in database
   const fetchPlayerStats = async (user) => {
     try {
@@ -215,6 +283,7 @@ export default function App() {
               strength: 10,
               xp: 0,
               level: 1,
+              jail_until: null,
               last_updated: new Date().toISOString()
             }
           ])
@@ -375,7 +444,8 @@ export default function App() {
       addLog(`🏦 OVERVAL GESLAAGD! De lokale kluis leeggehaald voor $${heistLoot}! +40 XP.`, 'success');
     } else {
       if (Math.random() > 0.5) {
-        setJailTime(60);
+        const jailUntil = new Date(Date.now() + 60 * 1000).toISOString();
+        newStats.jail_until = jailUntil;
         addLog(`🚨 COPS! De SWAT was te snel ter plaatse. 60 seconden gevangenisstraf.`, 'jail');
       } else {
         addLog(`🏃 Alarm ging af! Je bent ternauwernood ontsnapt zonder buit.`, 'error');
@@ -383,6 +453,155 @@ export default function App() {
     }
 
     updateDB(newStats);
+  };
+
+  const handlePrisonBribe = async () => {
+    if (jailTime <= 0) return addLog('✅ Je bent al vrij.', 'info');
+    if (!stats) return;
+
+    const bribeCost = calculatePrisonBribeCost(jailTime);
+    const currentCash = stats.cash || 0;
+    if (currentCash < bribeCost) {
+      setPrisonActionWarning(`Te weinig cash voor vrijkopen. Nodig: $${bribeCost.toLocaleString()}.`);
+      return addLog(`❌ Te weinig cash om je vrij te kopen. Nodig: $${bribeCost.toLocaleString()}.`, 'error');
+    }
+
+    setPrisonActionWarning('');
+    await updateDB({ cash: currentCash - bribeCost });
+    await updateDB({ jail_until: null });
+    addLog(`💸 Je hebt een bewaker omgekocht voor $${bribeCost.toLocaleString()} en bent vrij.`, 'success');
+  };
+
+  const handlePrisonEscape = async () => {
+    if (jailTime <= 0) return addLog('✅ Je bent al vrij.', 'info');
+    if (!stats) return;
+
+    const currentEnergy = stats.energy || 0;
+    const currentNerve = stats.nerve || 0;
+
+    if (currentNerve < PRISON_ESCAPE_NERVE_COST) {
+      setPrisonActionWarning(`Te weinig lef voor uitbreken. Nodig: ${PRISON_ESCAPE_NERVE_COST} lef.`);
+      return addLog(`❌ Te weinig lef voor een uitbraak. Minimaal ${PRISON_ESCAPE_NERVE_COST} lef nodig.`, 'error');
+    }
+
+    setPrisonActionWarning('');
+    const escaped = Math.random() < PRISON_ESCAPE_SUCCESS_CHANCE;
+    const baseFields = {
+      energy: currentEnergy,
+      nerve: Math.max(0, currentNerve - PRISON_ESCAPE_NERVE_COST)
+    };
+
+    if (escaped) {
+      await updateDB(baseFields);
+      await updateDB({ jail_until: null });
+      addLog('🕳️ Uitbraak gelukt! Je bent ontsnapt uit de gevangenis.', 'success');
+      return;
+    }
+
+    const extraSentence = Math.floor(Math.random() * 31) + 30;
+    const currentJailUntil = stats.jail_until ? new Date(stats.jail_until).getTime() : Date.now();
+    const nextJailUntil = new Date(currentJailUntil + extraSentence * 1000).toISOString();
+    await updateDB({
+      ...baseFields,
+      jail_until: nextJailUntil,
+      nerve: Math.max(0, currentNerve - PRISON_ESCAPE_NERVE_COST - 3)
+    });
+    addLog(`🚨 Uitbraak mislukt! Je straf is met ${extraSentence} seconden verlengd.`, 'jail');
+  };
+
+  const refreshPrisonMembers = async () => {
+    const nowIso = new Date().toISOString();
+    const { data, error } = await supabase
+      .from('player_stats')
+      .select('id, username, level, jail_until')
+      .gt('jail_until', nowIso)
+      .order('jail_until', { ascending: false });
+
+    if (error) throw error;
+    setPrisonMembers(data || []);
+  };
+
+  const handleRescueBuyout = async (target) => {
+    if (!stats || !user) return;
+    const remaining = getRemainingJailSeconds(target.jail_until);
+    if (remaining <= 0) return addLog('Deze speler is al vrij.', 'info');
+
+    const cost = calculatePrisonBribeCost(remaining);
+    const currentCash = stats.cash || 0;
+    if (currentCash < cost) {
+      return addLog(`❌ Te weinig cash om ${formatDisplayUsername(target.username)} vrij te kopen. Nodig: $${cost.toLocaleString()}.`, 'error');
+    }
+
+    try {
+      setPrisonActionLoadingId(target.id);
+      await updateDB({ cash: currentCash - cost });
+
+      const { error } = await supabase
+        .from('player_stats')
+        .update({ jail_until: null })
+        .eq('id', target.id);
+
+      if (error) {
+        await updateDB({ cash: currentCash });
+        throw error;
+      }
+
+      addLog(`🤝 Je hebt ${formatDisplayUsername(target.username)} vrijgekocht voor $${cost.toLocaleString()}.`, 'success');
+      await refreshPrisonMembers();
+    } catch (err) {
+      addLog(`❌ Vrijkoop voor speler mislukt: ${err.message}`, 'error');
+    } finally {
+      setPrisonActionLoadingId(null);
+    }
+  };
+
+  const handleRescueEscape = async (target) => {
+    if (!stats || !user) return;
+    const remaining = getRemainingJailSeconds(target.jail_until);
+    if (remaining <= 0) return addLog('Deze speler is al vrij.', 'info');
+
+    const currentNerve = stats.nerve || 0;
+    if (currentNerve < PRISON_RESCUE_NERVE_COST) {
+      return addLog(`❌ Je hebt minimaal ${PRISON_RESCUE_NERVE_COST} lef nodig om iemand te helpen ontsnappen.`, 'error');
+    }
+
+    const rescueChance = calculateRescueChance(remaining);
+    const escaped = Math.random() < rescueChance;
+
+    try {
+      setPrisonActionLoadingId(target.id);
+      await updateDB({ nerve: Math.max(0, currentNerve - PRISON_RESCUE_NERVE_COST) });
+
+      if (escaped) {
+        const { error } = await supabase
+          .from('player_stats')
+          .update({ jail_until: null })
+          .eq('id', target.id);
+
+        if (error) throw error;
+
+        addLog(`🕳️ Uitbraakhulp gelukt! ${formatDisplayUsername(target.username)} is vrij.`, 'success');
+      } else {
+        const extraSeconds = Math.floor(Math.random() * 21) + 20;
+        const targetBase = new Date(target.jail_until).getTime();
+        const updatedJailUntil = new Date(targetBase + extraSeconds * 1000).toISOString();
+
+        const { error } = await supabase
+          .from('player_stats')
+          .update({ jail_until: updatedJailUntil })
+          .eq('id', target.id);
+
+        if (error) throw error;
+
+        addLog(`🚨 Uitbraakhulp mislukt. Straf van ${formatDisplayUsername(target.username)} +${extraSeconds} sec.`, 'jail');
+      }
+
+      await refreshPrisonMembers();
+    } catch (err) {
+      addLog(`❌ Uitbraakhulp mislukt: ${err.message}`, 'error');
+    } finally {
+      setPrisonActionLoadingId(null);
+    }
   };
 
   // ==========================================
@@ -525,6 +744,8 @@ export default function App() {
 
   const handleLogout = () => {
     setSelectedMemberProfile(null);
+    setRankMenuOpenId(null);
+    setCityMenuOpen(false);
     setCurrentView('game');
     supabase.auth.signOut();
   };
@@ -539,6 +760,15 @@ export default function App() {
         if (userRole !== 'admin' && userRole !== 'moderator') {
           throw new Error('Alleen admins en moderators mogen cash geven.');
         }
+
+        if (member.id === user?.id) {
+          const nextCash = (stats?.cash || 0) + 1000;
+          await updateDB({ cash: nextCash });
+          addLog(`🛠️ Admin: ${formatDisplayUsername(member.username)} kreeg +$1.000.`, 'success');
+          await refreshAdminMembers();
+          return;
+        }
+
         const { error } = await supabase.rpc('admin_apply_action', {
           p_target_id: member.id,
           p_action: 'cash'
@@ -551,12 +781,89 @@ export default function App() {
         if (!STAFF_ROLES.includes(userRole)) {
           throw new Error('Geen rechten voor herstelactie.');
         }
+
+        if (member.id === user?.id) {
+          await updateDB({
+            energy: stats?.max_energy || stats?.energy || 100,
+            nerve: stats?.max_nerve || stats?.nerve || 20
+          });
+          addLog(`🛠️ Admin: ${formatDisplayUsername(member.username)} volledig hersteld.`, 'success');
+          await refreshAdminMembers();
+          return;
+        }
+
         const { error } = await supabase.rpc('admin_apply_action', {
           p_target_id: member.id,
           p_action: 'recover'
         });
         if (error) throw error;
         addLog(`🛠️ Admin: ${formatDisplayUsername(member.username)} volledig hersteld.`, 'success');
+      }
+
+      if (action === 'jail') {
+        if (userRole !== 'admin' && userRole !== 'moderator') {
+          throw new Error('Alleen admins en moderators mogen iemand opsluiten.');
+        }
+
+        if (member.id === user?.id) {
+          const selfJailUntil = new Date(Date.now() + ADMIN_JAIL_SECONDS * 1000).toISOString();
+          await updateDB({ jail_until: selfJailUntil });
+          addLog(`🚓 Admin: je zit ${ADMIN_JAIL_SECONDS} sec in de cel.`, 'jail');
+          await refreshAdminMembers();
+          return;
+        }
+
+        const { error } = await supabase.rpc('admin_apply_action', {
+          p_target_id: member.id,
+          p_action: `jail:${ADMIN_JAIL_SECONDS}`
+        });
+
+        if (error) {
+          const rpcMessage = (error.message || '').toLowerCase();
+          const jailActionMissing =
+            rpcMessage.includes('onbekende admin actie') ||
+            rpcMessage.includes('unknown') ||
+            rpcMessage.includes('jail');
+
+          if (jailActionMissing) {
+            const jailUntil = new Date(Date.now() + ADMIN_JAIL_SECONDS * 1000).toISOString();
+            const { data: fallbackUpdated, error: fallbackError } = await supabase
+              .from('player_stats')
+              .update({ jail_until: jailUntil })
+              .eq('id', member.id)
+              .select('id')
+              .maybeSingle();
+
+            if (fallbackError) {
+              throw new Error('Jail actie mislukt. Voeg jail support toe in admin_apply_action of controleer RLS policies.');
+            }
+
+            if (!fallbackUpdated) {
+              throw new Error('Jail actie geblokkeerd door RLS policy. Geef admins/moderators update-rechten op jail_until.');
+            }
+          } else if (rpcMessage.includes('function') && rpcMessage.includes('admin_apply_action')) {
+            throw new Error("RPC 'admin_apply_action' ontbreekt. Voeg de SQL setup toe in Supabase SQL Editor.");
+          } else {
+            throw error;
+          }
+        }
+
+        const { data: jailedTarget, error: verifyError } = await supabase
+          .from('player_stats')
+          .select('jail_until')
+          .eq('id', member.id)
+          .maybeSingle();
+
+        if (verifyError) {
+          throw new Error('Kon jail status niet verifiëren. Controleer RLS policies op player_stats.');
+        }
+
+        const remainingAfterAction = getRemainingJailSeconds(jailedTarget?.jail_until);
+        if (remainingAfterAction <= 0) {
+          throw new Error('Jail actie lijkt niet opgeslagen. Voeg jail support toe in admin_apply_action of controleer RLS update policy.');
+        }
+
+        addLog(`🚓 Admin: ${formatDisplayUsername(member.username)} zit ${ADMIN_JAIL_SECONDS} sec in de cel.`, 'jail');
       }
 
       if (action.startsWith('set-role:')) {
@@ -583,6 +890,7 @@ export default function App() {
         }
 
         addLog(`🛠️ Rol aangepast: ${formatDisplayUsername(member.username)} is nu ${nextRole}.`, 'success');
+        setRankMenuOpenId(null);
       }
 
       await refreshAdminMembers();
@@ -594,23 +902,68 @@ export default function App() {
   };
 
   const renderTopTabs = () => (
-    <div className="bg-slate-900 border-b border-slate-800 px-6 py-2 grid grid-cols-7 gap-2 w-full">
-      {NAV_TABS.map((tab) => (
-        <button
-          key={tab}
-          onClick={() => {
-            setActiveTab(tab);
-            setCurrentView('game');
-          }}
-          className={`w-full px-3 py-1 rounded-lg text-base font-bold border transition ${
-            activeTab === tab
-              ? 'bg-rose-600 text-white border-rose-500/20'
-              : 'bg-slate-950 text-slate-300 border-slate-800 hover:bg-slate-800 hover:text-white'
-          }`}
-        >
-          {tab.charAt(0).toUpperCase() + tab.slice(1)}
-        </button>
-      ))}
+    <div className="bg-slate-900 border-b border-slate-800 px-6 py-2 grid grid-cols-7 gap-2 w-full relative" style={{ zIndex: 200 }}>
+      {NAV_TABS.map((tab) => {
+        if (tab !== 'stad') {
+          return (
+            <button
+              key={tab}
+              onClick={() => {
+                setCityMenuOpen(false);
+                setActiveTab(tab);
+                setCurrentView(tab === 'misdaad' ? 'crime' : 'game');
+              }}
+              className={`w-full px-3 py-1 rounded-lg text-base font-bold border transition ${
+                activeTab === tab
+                  ? 'bg-rose-600 text-white border-rose-500/20'
+                  : 'bg-slate-950 text-slate-300 border-slate-800 hover:bg-slate-800 hover:text-white'
+              }`}
+            >
+              {tab.charAt(0).toUpperCase() + tab.slice(1)}
+            </button>
+          );
+        }
+
+        return (
+          <div key={tab} className="relative">
+            <button
+              onClick={() => setCityMenuOpen(prev => !prev)}
+              className={`w-full px-3 py-1 rounded-lg text-base font-bold border transition ${
+                activeTab === tab || currentView === 'prison'
+                  ? 'bg-rose-600 text-white border-rose-500/20'
+                  : 'bg-slate-950 text-slate-300 border-slate-800 hover:bg-slate-800 hover:text-white'
+              }`}
+            >
+              Stad
+            </button>
+
+            {cityMenuOpen && (
+              <div className="rank-menu absolute top-full left-0 mt-2 min-w-32 z-20 shadow-xl" style={{ zIndex: 9999 }}>
+                <button
+                  onClick={() => {
+                    setCityMenuOpen(false);
+                    setActiveTab('stad');
+                    setCurrentView('game');
+                  }}
+                  className="rank-menu-item"
+                >
+                  Stad
+                </button>
+                <button
+                  onClick={() => {
+                    setCityMenuOpen(false);
+                    setActiveTab('stad');
+                    setCurrentView('prison');
+                  }}
+                  className="rank-menu-item"
+                >
+                  Gevangenis
+                </button>
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 
@@ -619,6 +972,7 @@ export default function App() {
   const canManageRoles = userRole === 'admin';
   const canGiveCash = userRole === 'admin' || userRole === 'moderator';
   const canRecover = STAFF_ROLES.includes(userRole);
+  const canJail = userRole === 'admin' || userRole === 'moderator';
 
   const roleLabel = (value) => {
     const role = normalizeRole(value);
@@ -635,6 +989,119 @@ export default function App() {
     if (role === 'helper') return 'text-sky-400 font-semibold';
     return 'text-slate-500';
   };
+
+  const renderHeaderPlayerInfo = () => {
+    if (!stats) return null;
+
+    const energyTimerText =
+      (stats?.energy || 0) >= (stats?.max_energy || 100)
+        ? 'Energie vol'
+        : `+1 Energie in ${formatCountdown(recoveryTimers.energy)}`;
+
+    const nerveTimerText =
+      (stats?.nerve || 0) >= (stats?.max_nerve || 20)
+        ? 'Lef vol'
+        : `+1 Lef in ${formatCountdown(recoveryTimers.nerve)}`;
+
+    return (
+      <>
+        <div>
+          <div className="flex items-center gap-2 mb-0.5">
+            <Skull className="h-6 w-6 text-rose-500" />
+            <p className="text-lg text-slate-100 font-extrabold uppercase tracking-wide leading-none">District Underworld</p>
+          </div>
+          <h1 className="text-base font-bold text-white leading-tight">{stats?.username ? formatDisplayUsername(stats.username) : 'Onbekend'}</h1>
+          <p className="text-[10px] text-slate-400 font-mono">
+            Level {stats?.level || 1} • ${stats?.cash?.toLocaleString() || 0} • Energie {stats?.energy || 0}/{stats?.max_energy || 100} • Lef {stats?.nerve || 0}/{stats?.max_nerve || 20}
+          </p>
+          <p className="text-[10px] text-slate-500 font-mono mt-0.5">
+            {energyTimerText} • {nerveTimerText}
+          </p>
+        </div>
+      </>
+    );
+  };
+
+  useEffect(() => {
+    if (currentView !== 'prison' || !user) return;
+
+    const fetchPrisonMembers = async () => {
+      setPrisonLoading(true);
+      try {
+        await refreshPrisonMembers();
+      } catch (_error) {
+        setPrisonMembers([]);
+        addLog('❌ Gevangenisleden laden mislukt.', 'error');
+      } finally {
+        setPrisonLoading(false);
+      }
+    };
+
+    fetchPrisonMembers();
+    const interval = setInterval(fetchPrisonMembers, 10000);
+    return () => clearInterval(interval);
+  }, [currentView, user]);
+
+  useEffect(() => {
+    if (!stats || !user) return;
+
+    let isSyncing = false;
+
+    const tickRecovery = async () => {
+      const currentEnergy = Number(stats.energy) || 0;
+      const maxEnergy = Number(stats.max_energy) || 100;
+      const currentNerve = Number(stats.nerve) || 0;
+      const maxNerve = Number(stats.max_nerve) || 20;
+
+      const lastUpdatedMs = new Date(stats.last_updated || Date.now()).getTime();
+      const elapsedSeconds = Math.max(0, Math.floor((Date.now() - lastUpdatedMs) / 1000));
+
+      const energyAtCap = currentEnergy >= maxEnergy;
+      const nerveAtCap = currentNerve >= maxNerve;
+
+      const energyCountdown = energyAtCap
+        ? null
+        : ENERGY_RECOVERY_INTERVAL_SECONDS - (elapsedSeconds % ENERGY_RECOVERY_INTERVAL_SECONDS || ENERGY_RECOVERY_INTERVAL_SECONDS);
+
+      const nerveCountdown = nerveAtCap
+        ? null
+        : NERVE_RECOVERY_INTERVAL_SECONDS - (elapsedSeconds % NERVE_RECOVERY_INTERVAL_SECONDS || NERVE_RECOVERY_INTERVAL_SECONDS);
+
+      setRecoveryTimers({ energy: energyCountdown, nerve: nerveCountdown });
+
+      if (isSyncing || (energyAtCap && nerveAtCap)) return;
+
+      const energyGain = Math.floor(elapsedSeconds / ENERGY_RECOVERY_INTERVAL_SECONDS);
+      const nerveGain = Math.floor(elapsedSeconds / NERVE_RECOVERY_INTERVAL_SECONDS);
+
+      if (energyGain <= 0 && nerveGain <= 0) return;
+
+      const nextEnergy = Math.min(maxEnergy, currentEnergy + energyGain);
+      const nextNerve = Math.min(maxNerve, currentNerve + nerveGain);
+
+      if (nextEnergy === currentEnergy && nextNerve === currentNerve) return;
+
+      isSyncing = true;
+      try {
+        await updateDB({ energy: nextEnergy, nerve: nextNerve });
+      } finally {
+        isSyncing = false;
+      }
+    };
+
+    void tickRecovery();
+    const interval = setInterval(() => {
+      void tickRecovery();
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [stats, user]);
+
+  useEffect(() => {
+    if (currentView !== 'prison' || jailTime <= 0) {
+      setPrisonActionWarning('');
+    }
+  }, [currentView, jailTime]);
 
   if (loading) {
     return (
@@ -798,11 +1265,7 @@ export default function App() {
       <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
         <header className="bg-slate-900 border-b border-slate-800 py-4 px-6 flex flex-wrap justify-between items-center gap-4">
           <div className="flex items-center gap-3">
-            <Skull className="h-6 w-6 text-rose-500" />
-            <div>
-              <h1 className="text-base font-bold text-white leading-tight">Mijn Profiel</h1>
-              <p className="text-[10px] text-slate-400 font-mono">District Underworld profielpagina</p>
-            </div>
+            {renderHeaderPlayerInfo()}
           </div>
           <div className="flex items-center gap-2">
             {canOpenStaffPanel && (
@@ -853,11 +1316,7 @@ export default function App() {
       <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
         <header className="bg-slate-900 border-b border-slate-800 py-4 px-6 flex flex-wrap justify-between items-center gap-4">
           <div className="flex items-center gap-3">
-            <Shield className="h-6 w-6 text-rose-500" />
-            <div>
-              <h1 className="text-base font-bold text-white leading-tight">Staff Functies</h1>
-              <p className="text-[10px] text-slate-400 font-mono">Beheer spelers op basis van je rol</p>
-            </div>
+            {renderHeaderPlayerInfo()}
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -890,7 +1349,10 @@ export default function App() {
             ) : (
               <div className="space-y-2.5">
                 {adminMembers.map((member) => (
-                  <div key={member.id} className="bg-slate-950 border border-slate-850 rounded-xl p-3">
+                  <div
+                    key={member.id}
+                    className={`bg-slate-950 border border-slate-850 rounded-xl p-3 relative ${rankMenuOpenId === member.id ? 'z-20' : ''}`}
+                  >
                     <div className="flex justify-between items-center gap-3">
                       <div>
                         <p className="text-sm font-semibold text-slate-200">{formatDisplayUsername(member.username || 'Onbekend')}</p>
@@ -904,50 +1366,68 @@ export default function App() {
                       </div>
                       <div className="flex items-center gap-2">
                         {canManageRoles && (
-                          <>
+                          <div className="relative">
                             <button
-                              onClick={() => performAdminAction(member, 'set-role:lid')}
-                              disabled={adminActionLoadingId === member.id || normalizeRole(member.role) === 'lid'}
-                              className="px-2 py-1 rounded-lg text-xs border border-slate-800 bg-slate-900 hover:bg-slate-800 text-slate-200"
+                              onClick={() => setRankMenuOpenId(prev => prev === member.id ? null : member.id)}
+                              className="staff-btn staff-btn-rank"
                             >
-                              Lid
+                              Verander rank
                             </button>
-                            <button
-                              onClick={() => performAdminAction(member, 'set-role:helper')}
-                              disabled={adminActionLoadingId === member.id || normalizeRole(member.role) === 'helper'}
-                              className="px-2 py-1 rounded-lg text-xs border border-slate-800 bg-slate-900 hover:bg-slate-800 text-slate-200"
-                            >
-                              Helper
-                            </button>
-                            <button
-                              onClick={() => performAdminAction(member, 'set-role:moderator')}
-                              disabled={adminActionLoadingId === member.id || normalizeRole(member.role) === 'moderator'}
-                              className="px-2 py-1 rounded-lg text-xs border border-slate-800 bg-slate-900 hover:bg-slate-800 text-slate-200"
-                            >
-                              Mod
-                            </button>
-                            <button
-                              onClick={() => performAdminAction(member, 'set-role:admin')}
-                              disabled={adminActionLoadingId === member.id || normalizeRole(member.role) === 'admin'}
-                              className="px-2 py-1 rounded-lg text-xs border border-slate-800 bg-slate-900 hover:bg-slate-800 text-slate-200"
-                            >
-                              Admin
-                            </button>
-                          </>
+
+                            {rankMenuOpenId === member.id && (
+                              <div className="rank-menu absolute right-0 top-full mt-2 min-w-32 z-20 shadow-xl">
+                                <button
+                                  onClick={() => performAdminAction(member, 'set-role:lid')}
+                                  disabled={adminActionLoadingId === member.id || normalizeRole(member.role) === 'lid'}
+                                  className="rank-menu-item"
+                                >
+                                  Lid
+                                </button>
+                                <button
+                                  onClick={() => performAdminAction(member, 'set-role:helper')}
+                                  disabled={adminActionLoadingId === member.id || normalizeRole(member.role) === 'helper'}
+                                  className="rank-menu-item"
+                                >
+                                  Helper
+                                </button>
+                                <button
+                                  onClick={() => performAdminAction(member, 'set-role:moderator')}
+                                  disabled={adminActionLoadingId === member.id || normalizeRole(member.role) === 'moderator'}
+                                  className="rank-menu-item"
+                                >
+                                  Moderator
+                                </button>
+                                <button
+                                  onClick={() => performAdminAction(member, 'set-role:admin')}
+                                  disabled={adminActionLoadingId === member.id || normalizeRole(member.role) === 'admin'}
+                                  className="rank-menu-item"
+                                >
+                                  Admin
+                                </button>
+                              </div>
+                            )}
+                          </div>
                         )}
                         <button
                           onClick={() => performAdminAction(member, 'cash')}
                           disabled={adminActionLoadingId === member.id || !canGiveCash}
-                          className="px-2 py-1 rounded-lg text-xs border border-slate-800 bg-slate-900 hover:bg-slate-800 text-slate-200"
+                          className="staff-btn staff-btn-cash"
                         >
                           +$1.000
                         </button>
                         <button
                           onClick={() => performAdminAction(member, 'recover')}
                           disabled={adminActionLoadingId === member.id || !canRecover}
-                          className="px-2 py-1 rounded-lg text-xs border border-slate-800 bg-slate-900 hover:bg-slate-800 text-slate-200"
+                          className="staff-btn staff-btn-recover"
                         >
                           Herstel
+                        </button>
+                        <button
+                          onClick={() => performAdminAction(member, 'jail')}
+                          disabled={adminActionLoadingId === member.id || !canJail}
+                          className="staff-btn staff-btn-rank"
+                        >
+                          Cel 60s
                         </button>
                       </div>
                     </div>
@@ -966,11 +1446,7 @@ export default function App() {
       <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
         <header className="bg-slate-900 border-b border-slate-800 py-4 px-6 flex flex-wrap justify-between items-center gap-4">
           <div className="flex items-center gap-3">
-            <Skull className="h-6 w-6 text-rose-500" />
-            <div>
-              <h1 className="text-base font-bold text-white leading-tight">Online Leden</h1>
-              <p className="text-[10px] text-slate-400 font-mono">District Underworld ledenpagina</p>
-            </div>
+            {renderHeaderPlayerInfo()}
           </div>
           <div className="flex items-center gap-2">
             {canOpenStaffPanel && (
@@ -1041,11 +1517,7 @@ export default function App() {
       <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
         <header className="bg-slate-900 border-b border-slate-800 py-4 px-6 flex flex-wrap justify-between items-center gap-4">
           <div className="flex items-center gap-3">
-            <Skull className="h-6 w-6 text-rose-500" />
-            <div>
-              <h1 className="text-base font-bold text-white leading-tight">Spelerprofiel</h1>
-              <p className="text-[10px] text-slate-400 font-mono">Profiel van online lid</p>
-            </div>
+            {renderHeaderPlayerInfo()}
           </div>
           <div className="flex items-center gap-2">
             {canOpenStaffPanel && (
@@ -1090,17 +1562,245 @@ export default function App() {
     );
   }
 
+  if (currentView === 'crime') {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
+        <header className="bg-slate-900 border-b border-slate-800 py-4 px-6 flex flex-wrap justify-between items-center gap-4">
+          <div className="flex items-center gap-3">
+            {renderHeaderPlayerInfo()}
+          </div>
+          <div className="flex items-center gap-2">
+            {canOpenStaffPanel && (
+              <button
+                onClick={() => setCurrentView('admin')}
+                className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
+                title="Open admin functies"
+              >
+                Admin
+              </button>
+            )}
+            <button
+              onClick={() => setCurrentView('profile')}
+              className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
+              title="Toon mijn profiel"
+            >
+              Mijn profiel
+            </button>
+            <button
+              onClick={() => setCurrentView('online-members')}
+              className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
+              title="Toon online leden"
+            >
+              Online leden
+            </button>
+            <button
+              onClick={handleLogout}
+              className="p-2 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition"
+              title="Log uit"
+            >
+              <LogOut className="h-4 w-4" />
+            </button>
+          </div>
+        </header>
+
+        {renderTopTabs()}
+
+        <main className="flex-grow p-6">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl max-w-3xl mx-auto">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-4">💀 Misdaad operaties</h3>
+
+            {jailTime > 0 && (
+              <div className="bg-red-950/40 border border-red-800/40 rounded-xl p-4 mb-4">
+                <p className="text-red-300 text-sm font-semibold">Je zit opgesloten.</p>
+                <p className="text-red-200/80 text-xs mt-1">Nog {jailTime} seconden. Misdaden zijn tijdelijk geblokkeerd.</p>
+              </div>
+            )}
+
+            <div className="space-y-3">
+              <button
+                onClick={handlePickpocket}
+                disabled={jailTime > 0}
+                className="w-full bg-slate-950 hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed text-white p-3.5 rounded-xl border border-slate-800 flex justify-between items-center transition"
+              >
+                <div className="flex items-center gap-3">
+                  <span className="text-2xl">👛</span>
+                  <div className="text-left">
+                    <p className="text-sm font-semibold">Toerist Rollen</p>
+                    <p className="text-xs text-slate-400">75% kans op succes (Makkelijk)</p>
+                  </div>
+                </div>
+                <span className="bg-purple-550/10 text-purple-400 text-[10px] font-bold px-2 py-1 rounded font-mono border border-purple-500/20">-4 Nerve</span>
+              </button>
+
+              <button
+                onClick={handleHeist}
+                disabled={jailTime > 0}
+                className="w-full bg-slate-950 hover:bg-rose-950/20 hover:border-rose-900/40 disabled:opacity-50 disabled:cursor-not-allowed text-white p-3.5 rounded-xl border border-slate-800 flex justify-between items-center transition"
+              >
+                <div className="flex items-center gap-3">
+                  <span className="text-2xl">🏦</span>
+                  <div className="text-left">
+                    <p className="text-sm font-semibold text-rose-300">Grote Kluis Overvallen</p>
+                    <p className="text-xs text-slate-400">Hoog risico op arrestatie, gigantische buit</p>
+                  </div>
+                </div>
+                <span className="bg-purple-550/10 text-purple-400 text-[10px] font-bold px-2 py-1 rounded font-mono border border-purple-500/20">-12 Nerve</span>
+              </button>
+            </div>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  if (currentView === 'prison') {
+    const rescueTargets = prisonMembers.filter((member) => member.id !== user?.id && getRemainingJailSeconds(member.jail_until) > 0);
+
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
+        <header className="bg-slate-900 border-b border-slate-800 py-4 px-6 flex flex-wrap justify-between items-center gap-4">
+          <div className="flex items-center gap-3">
+            {renderHeaderPlayerInfo()}
+          </div>
+          <div className="flex items-center gap-2">
+            {canOpenStaffPanel && (
+              <button
+                onClick={() => setCurrentView('admin')}
+                className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
+                title="Open admin functies"
+              >
+                Admin
+              </button>
+            )}
+            <button
+              onClick={() => setCurrentView('profile')}
+              className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
+              title="Toon mijn profiel"
+            >
+              Mijn profiel
+            </button>
+            <button
+              onClick={() => setCurrentView('online-members')}
+              className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
+              title="Toon online leden"
+            >
+              Online leden
+            </button>
+            <button
+              onClick={handleLogout}
+              className="p-2 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition"
+              title="Log uit"
+            >
+              <LogOut className="h-4 w-4" />
+            </button>
+          </div>
+        </header>
+
+        {renderTopTabs()}
+
+        <main className="flex-grow p-6">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl max-w-4xl mx-auto">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-4">🔒 Celstatus</h3>
+
+            {jailTime > 0 ? (
+              <div className="bg-red-950/40 border border-red-800/40 rounded-xl p-4">
+                <p className="text-red-300 text-sm font-semibold">Je zit opgesloten.</p>
+                <p className="text-red-200/80 text-xs mt-1">Nog {jailTime} seconden tot je vrijkomt.</p>
+              </div>
+            ) : (
+              <div className="bg-emerald-950/30 border border-emerald-800/30 rounded-xl p-4">
+                <p className="text-emerald-300 text-sm font-semibold">Je bent vrij.</p>
+                <p className="text-emerald-200/80 text-xs mt-1">Er is op dit moment geen actieve straf.</p>
+              </div>
+            )}
+
+            {jailTime > 0 && prisonActionWarning && (
+              <div className="mt-3 bg-amber-950/30 border border-amber-800/40 rounded-xl p-3">
+                <p className="text-amber-300 text-xs font-semibold">Onvoldoende middelen</p>
+                <p className="text-amber-200/90 text-xs mt-1">{prisonActionWarning}</p>
+              </div>
+            )}
+
+            {jailTime > 0 && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-4">
+                <button
+                  onClick={handlePrisonBribe}
+                  className="w-full bg-slate-950 hover:bg-slate-800 text-white p-3 rounded-xl border border-slate-800 text-left transition"
+                >
+                  <p className="text-sm font-semibold text-emerald-300">Vrijkopen</p>
+                  <p className="text-xs text-slate-400 mt-1">Betaal ${calculatePrisonBribeCost(jailTime).toLocaleString()} op basis van je resterende straftijd.</p>
+                </button>
+
+                <button
+                  onClick={handlePrisonEscape}
+                  className="w-full bg-slate-950 hover:bg-slate-800 text-white p-3 rounded-xl border border-slate-800 text-left transition"
+                >
+                  <p className="text-sm font-semibold text-rose-300">Uitbreken</p>
+                  <p className="text-xs text-slate-400 mt-1">{Math.round(PRISON_ESCAPE_SUCCESS_CHANCE * 100)}% kans. Kost {PRISON_ESCAPE_NERVE_COST} lef.</p>
+                </button>
+              </div>
+            )}
+
+            <div className="mt-6 border-t border-slate-800 pt-4">
+              <div className="flex justify-between items-center mb-3">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">🧍 Gevangenen helpen</h4>
+                <span className="text-xs text-slate-500">{rescueTargets.length} opgesloten</span>
+              </div>
+
+              {prisonLoading ? (
+                <p className="text-xs text-slate-400">Gevangenen laden...</p>
+              ) : rescueTargets.length === 0 ? (
+                <p className="text-xs text-slate-500">Niemand zit momenteel vast.</p>
+              ) : (
+                <div className="space-y-2.5">
+                  {rescueTargets.map((member) => {
+                    const remaining = getRemainingJailSeconds(member.jail_until);
+                    const rescueCost = calculatePrisonBribeCost(remaining);
+                    const rescueChance = Math.round(calculateRescueChance(remaining) * 100);
+
+                    return (
+                      <div key={member.id} className="bg-slate-950 border border-slate-850 rounded-xl p-3">
+                        <div className="flex flex-wrap justify-between items-center gap-3">
+                          <div>
+                            <p className="text-sm font-semibold text-slate-200">{formatDisplayUsername(member.username || 'Onbekend')}</p>
+                            <p className="text-xs text-slate-400">Level {member.level || 1} • Nog {remaining} sec vast</p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => handleRescueBuyout(member)}
+                              disabled={prisonActionLoadingId === member.id || remaining <= 0}
+                              className="px-2 py-1 rounded-lg text-xs border border-slate-800 bg-slate-900 hover:bg-slate-800 text-slate-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                              Vrijkopen (${rescueCost.toLocaleString()})
+                            </button>
+                            <button
+                              onClick={() => handleRescueEscape(member)}
+                              disabled={prisonActionLoadingId === member.id || remaining <= 0}
+                              className="px-2 py-1 rounded-lg text-xs border border-slate-800 bg-slate-900 hover:bg-slate-800 text-slate-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                              Uitbreken ({rescueChance}%)
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
   // Active Game Dashboard
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
       {/* HEADER */}
       <header className="bg-slate-900 border-b border-slate-800 py-4 px-6 flex flex-wrap justify-between items-center gap-4">
         <div className="flex items-center gap-3">
-          <Skull className="h-6 w-6 text-rose-500" />
-          <div>
-            <h1 className="text-base font-bold text-white leading-tight">District Underworld</h1>
-            <p className="text-[10px] text-slate-400 font-mono">Geautoriseerde maffia-omgeving</p>
-          </div>
+          {renderHeaderPlayerInfo()}
         </div>
         <div className="flex items-center gap-4">
           <div className="text-right text-xs">
