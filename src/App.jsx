@@ -318,6 +318,7 @@ export default function App() {
           email, 
           password,
           options: {
+            emailRedirectTo: `${window.location.origin}/`,
             data: { username: normalizedUsername }
           }
         });
@@ -333,8 +334,16 @@ export default function App() {
           throw new Error('Dit e-mailadres is al in gebruik.');
         }
 
-        addLog("✅ Account aangemaakt! Je kunt nu inloggen.", "success");
-        setAuthSuccess('Account aangemaakt. Je kunt nu inloggen met je gebruikersnaam en wachtwoord.');
+        const needsEmailConfirmation = !signUpData?.session;
+
+        if (needsEmailConfirmation) {
+          addLog("✉️ Bevestig eerst je e-mailadres via de link in je inbox.", "info");
+          setAuthSuccess('Account aangemaakt. Bevestig eerst je e-mailadres via de link in je inbox, daarna kun je inloggen.');
+        } else {
+          addLog("✅ Account aangemaakt! Je kunt nu inloggen.", "success");
+          setAuthSuccess('Account aangemaakt. Je kunt nu inloggen met je gebruikersnaam en wachtwoord.');
+        }
+
         setIsRegistering(false);
         setLoginUsername(normalizedUsername);
         setPassword('');
@@ -379,6 +388,8 @@ export default function App() {
         ? 'Gebruikersnaam of wachtwoord is onjuist.'
         : lowerMessage.includes('already registered')
           ? 'Dit e-mailadres is al in gebruik.'
+          : lowerMessage.includes('email not confirmed')
+            ? 'Bevestig eerst je e-mailadres via de link in je inbox.'
           : rawMessage;
 
       setAuthError(normalizedMessage);
