@@ -560,14 +560,21 @@ export default function App() {
       // Fallback voor oude setup zonder prison_help_player RPC.
       await updateDB({ cash: currentCash - cost });
 
-      const { error: updateError } = await supabase
+      const { data: releasedTarget, error: updateError } = await supabase
         .from('player_stats')
         .update({ jail_until: null })
-        .eq('id', target.id);
+        .eq('id', target.id)
+        .select('id')
+        .maybeSingle();
 
       if (updateError) {
         await updateDB({ cash: currentCash });
         throw updateError;
+      }
+
+      if (!releasedTarget) {
+        await updateDB({ cash: currentCash });
+        throw new Error('Vrijkoop geblokkeerd door RLS policy op player_stats.');
       }
 
       addLog(`🤝 Je hebt ${formatDisplayUsername(target.username)} vrijgekocht voor $${cost.toLocaleString()}.`, 'success');
@@ -614,12 +621,22 @@ export default function App() {
       await updateDB({ nerve: Math.max(0, currentNerve - PRISON_RESCUE_NERVE_COST) });
 
       if (escaped) {
-        const { error: updateError } = await supabase
+        const { data: releasedTarget, error: updateError } = await supabase
           .from('player_stats')
           .update({ jail_until: null })
-          .eq('id', target.id);
+          .eq('id', target.id)
+          .select('id')
+          .maybeSingle();
 
-        if (updateError) throw updateError;
+        if (updateError) {
+          await updateDB({ nerve: currentNerve });
+          throw updateError;
+        }
+
+        if (!releasedTarget) {
+          await updateDB({ nerve: currentNerve });
+          throw new Error('Uitbraakhulp geblokkeerd door RLS policy op player_stats.');
+        }
 
         addLog(`🕳️ Uitbraakhulp gelukt! ${formatDisplayUsername(target.username)} is vrij.`, 'success');
       } else {
@@ -627,12 +644,22 @@ export default function App() {
         const targetBase = new Date(target.jail_until).getTime();
         const updatedJailUntil = new Date(targetBase + extraSeconds * 1000).toISOString();
 
-        const { error: updateError } = await supabase
+        const { data: updatedTarget, error: updateError } = await supabase
           .from('player_stats')
           .update({ jail_until: updatedJailUntil })
-          .eq('id', target.id);
+          .eq('id', target.id)
+          .select('id')
+          .maybeSingle();
 
-        if (updateError) throw updateError;
+        if (updateError) {
+          await updateDB({ nerve: currentNerve });
+          throw updateError;
+        }
+
+        if (!updatedTarget) {
+          await updateDB({ nerve: currentNerve });
+          throw new Error('Uitbraakhulp geblokkeerd door RLS policy op player_stats.');
+        }
 
         addLog(`🚨 Uitbraakhulp mislukt. Straf van ${formatDisplayUsername(target.username)} +${extraSeconds} sec.`, 'jail');
       }
