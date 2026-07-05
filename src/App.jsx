@@ -251,6 +251,11 @@ export default function App() {
     return Math.max(0.1, Math.min(0.6, chance));
   };
 
+  const isMissingPrisonRpc = (error) => {
+    const message = (error?.message || '').toLowerCase();
+    return message.includes('function') && message.includes('prison_help_player');
+  };
+
   // Fetch or initialize player stats in database
   const fetchPlayerStats = async (user) => {
     try {
@@ -534,16 +539,35 @@ export default function App() {
 
     try {
       setPrisonActionLoadingId(target.id);
+
+      const { data, error } = await supabase.rpc('prison_help_player', {
+        p_target_id: target.id,
+        p_action: 'buyout'
+      });
+
+      if (!error) {
+        const successMessage = data?.message || `🤝 Je hebt ${formatDisplayUsername(target.username)} vrijgekocht voor $${cost.toLocaleString()}.`;
+        addLog(successMessage, 'success');
+        await refreshPrisonMembers();
+        await fetchPlayerStats(user);
+        return;
+      }
+
+      if (!isMissingPrisonRpc(error)) {
+        throw error;
+      }
+
+      // Fallback voor oude setup zonder prison_help_player RPC.
       await updateDB({ cash: currentCash - cost });
 
-      const { error } = await supabase
+      const { error: updateError } = await supabase
         .from('player_stats')
         .update({ jail_until: null })
         .eq('id', target.id);
 
-      if (error) {
+      if (updateError) {
         await updateDB({ cash: currentCash });
-        throw error;
+        throw updateError;
       }
 
       addLog(`🤝 Je hebt ${formatDisplayUsername(target.username)} vrijgekocht voor $${cost.toLocaleString()}.`, 'success');
@@ -565,20 +589,37 @@ export default function App() {
       return addLog(`❌ Je hebt minimaal ${PRISON_RESCUE_NERVE_COST} lef nodig om iemand te helpen ontsnappen.`, 'error');
     }
 
-    const rescueChance = calculateRescueChance(remaining);
-    const escaped = Math.random() < rescueChance;
-
     try {
       setPrisonActionLoadingId(target.id);
+
+      const { data, error } = await supabase.rpc('prison_help_player', {
+        p_target_id: target.id,
+        p_action: 'escape'
+      });
+
+      if (!error) {
+        addLog(data?.message || `🕳️ Uitbraakhulp geprobeerd op ${formatDisplayUsername(target.username)}.`, data?.escaped ? 'success' : 'jail');
+        await refreshPrisonMembers();
+        await fetchPlayerStats(user);
+        return;
+      }
+
+      if (!isMissingPrisonRpc(error)) {
+        throw error;
+      }
+
+      // Fallback voor oude setup zonder prison_help_player RPC.
+      const rescueChance = calculateRescueChance(remaining);
+      const escaped = Math.random() < rescueChance;
       await updateDB({ nerve: Math.max(0, currentNerve - PRISON_RESCUE_NERVE_COST) });
 
       if (escaped) {
-        const { error } = await supabase
+        const { error: updateError } = await supabase
           .from('player_stats')
           .update({ jail_until: null })
           .eq('id', target.id);
 
-        if (error) throw error;
+        if (updateError) throw updateError;
 
         addLog(`🕳️ Uitbraakhulp gelukt! ${formatDisplayUsername(target.username)} is vrij.`, 'success');
       } else {
@@ -586,12 +627,12 @@ export default function App() {
         const targetBase = new Date(target.jail_until).getTime();
         const updatedJailUntil = new Date(targetBase + extraSeconds * 1000).toISOString();
 
-        const { error } = await supabase
+        const { error: updateError } = await supabase
           .from('player_stats')
           .update({ jail_until: updatedJailUntil })
           .eq('id', target.id);
 
-        if (error) throw error;
+        if (updateError) throw updateError;
 
         addLog(`🚨 Uitbraakhulp mislukt. Straf van ${formatDisplayUsername(target.username)} +${extraSeconds} sec.`, 'jail');
       }
