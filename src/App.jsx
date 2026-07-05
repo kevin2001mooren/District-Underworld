@@ -26,6 +26,7 @@ export default function App() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [username, setUsername] = useState('');
+  const [gender, setGender] = useState('');
   const [loginUsername, setLoginUsername] = useState('');
   const [authError, setAuthError] = useState('');
   const [authSuccess, setAuthSuccess] = useState('');
@@ -88,6 +89,13 @@ export default function App() {
     return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
   };
 
+  const formatGenderLabel = (value) => {
+    if (!value || typeof value !== 'string') return 'Onbekend';
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'liever-niet-zeggen') return 'Liever niet zeggen';
+    return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+  };
+
   // Fetch or initialize player stats in database
   const fetchPlayerStats = async (user) => {
     try {
@@ -95,6 +103,7 @@ export default function App() {
       
       // Haal de naam uit de metadata (als die bestaat)
       const metaUsername = user.user_metadata?.username;
+      const metaGender = user.user_metadata?.gender;
       
       let { data, error } = await supabase
         .from('player_stats')
@@ -110,6 +119,7 @@ export default function App() {
             { 
               id: user.id, 
               username: metaUsername || username || defaultUsername, // Prioriteit: Metadata > Formulier > Random
+              gender: metaGender || gender || null,
               cash: 1000,
               energy: 100,
               max_energy: 100,
@@ -295,7 +305,7 @@ export default function App() {
     setAuthSuccess('');
 
     if (isRegistering) {
-      if (!email || !password || !username) return;
+      if (!email || !password || !username || !gender) return;
     } else {
       if (!loginUsername || !password) return;
     }
@@ -325,7 +335,12 @@ export default function App() {
           password,
           options: {
             ...(getEmailRedirectUrl() ? { emailRedirectTo: getEmailRedirectUrl() } : {}),
-            data: { username: normalizedUsername }
+            data: {
+              username: normalizedUsername,
+              display_name: normalizedUsername,
+              full_name: normalizedUsername,
+              gender
+            }
           }
         });
 
@@ -352,6 +367,7 @@ export default function App() {
 
         setIsRegistering(false);
         setLoginUsername(normalizedUsername);
+        setGender('');
         setPassword('');
       } else {
         const normalizedLoginUsername = loginUsername.trim();
@@ -458,6 +474,29 @@ export default function App() {
                     className="w-full bg-slate-950 border border-slate-850 rounded-xl py-2 pl-10 pr-4 text-sm text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-rose-500 transition"
                     required
                   />
+                </div>
+              </div>
+            )}
+
+            {isRegistering && (
+              <div>
+                <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Gender</label>
+                <div className="relative">
+                  <select
+                    value={gender}
+                    onChange={(e) => {
+                      setGender(e.target.value);
+                      setAuthError('');
+                    }}
+                    className="w-full bg-slate-950 border border-slate-850 rounded-xl py-2 pl-3 pr-4 text-sm text-slate-200 focus:outline-none focus:border-rose-500 transition"
+                    required
+                  >
+                    <option value="">Kies een optie</option>
+                    <option value="man">Man</option>
+                    <option value="vrouw">Vrouw</option>
+                    <option value="anders">Anders</option>
+                    <option value="liever-niet-zeggen">Liever niet zeggen</option>
+                  </select>
                 </div>
               </div>
             )}
@@ -592,6 +631,9 @@ export default function App() {
                 <h2 className="text-xl font-bold text-white tracking-tight">{stats?.username ? formatDisplayUsername(stats.username) : "Petty Criminal"}</h2>
                 <span className="text-xs bg-slate-800 text-slate-300 px-2.5 py-1 rounded font-mono block mt-1 w-fit">
                   Level {stats?.level || 1} • Kruimeldief
+                </span>
+                <span className="text-xs text-slate-400 block mt-1">
+                  Gender: {formatGenderLabel(stats?.gender)}
                 </span>
               </div>
               <div className="text-right">
