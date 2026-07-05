@@ -10,11 +10,12 @@ import { Shield, Skull, Zap, Swords, Coins, User, Lock, LogOut, Loader2, Award, 
 // =========================================================
 const SUPABASE_URL = "https://utqwbqymcbgoqunpjfff.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InV0cXdicXltY2Jnb3F1bnBqZmZmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMTAyMTUsImV4cCI6MjA5ODc4NjIxNX0.jirvlYKUSSmXDT-OC50zOR5TKVYEwT8NFAIFOBGhxSY";
+const APP_PUBLIC_URL = "https://district-underworld.vercel.app/";
 
 const getEmailRedirectUrl = () => {
   const host = window.location.hostname;
   const isLocalhost = host === 'localhost' || host === '127.0.0.1';
-  return isLocalhost ? null : `${window.location.origin}/`;
+  return isLocalhost ? APP_PUBLIC_URL : `${window.location.origin}/`;
 };
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
@@ -144,48 +145,26 @@ export default function App() {
 
       if (error && error.code === 'PGRST116') {
         const defaultUsername = email.split('@')[0] + "_" + Math.floor(Math.random() * 1000);
-        const basePlayerStats = {
-          id: user.id,
-          username: metaUsername || username || defaultUsername, // Prioriteit: Metadata > Formulier > Random
-          cash: 1000,
-          energy: 100,
-          max_energy: 100,
-          nerve: 20,
-          max_nerve: 20,
-          strength: 10,
-          xp: 0,
-          level: 1,
-          last_updated: new Date().toISOString()
-        };
-
-        let { data: newRecord, error: createError } = await supabase
+        const { data: newRecord, error: createError } = await supabase
           .from('player_stats')
           .insert([
-            {
-              ...basePlayerStats,
-              gender: metaGender || gender || null
+            { 
+              id: user.id, 
+              username: metaUsername || username || defaultUsername, // Prioriteit: Metadata > Formulier > Random
+              gender: metaGender || gender || null,
+              cash: 1000,
+              energy: 100,
+              max_energy: 100,
+              nerve: 20,
+              max_nerve: 20,
+              strength: 10,
+              xp: 0,
+              level: 1,
+              last_updated: new Date().toISOString()
             }
           ])
           .select()
           .single();
-
-        // Als de kolom 'gender' nog niet bestaat in deze DB, probeer opnieuw zonder gender.
-        const genderColumnMissing =
-          createError?.code === 'PGRST204' ||
-          createError?.message?.toLowerCase().includes('gender') ||
-          createError?.details?.toLowerCase().includes('gender');
-
-        if (createError && genderColumnMissing) {
-          const retry = await supabase
-            .from('player_stats')
-            .insert([basePlayerStats])
-            .select()
-            .single();
-
-          newRecord = retry.data;
-          createError = retry.error;
-          addLog('ℹ️ Gender kon niet worden opgeslagen omdat de databasekolom ontbreekt.', 'info');
-        }
 
         if (createError) throw createError;
         data = newRecord;
