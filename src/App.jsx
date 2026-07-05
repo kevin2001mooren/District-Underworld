@@ -144,26 +144,48 @@ export default function App() {
 
       if (error && error.code === 'PGRST116') {
         const defaultUsername = email.split('@')[0] + "_" + Math.floor(Math.random() * 1000);
-        const { data: newRecord, error: createError } = await supabase
+        const basePlayerStats = {
+          id: user.id,
+          username: metaUsername || username || defaultUsername, // Prioriteit: Metadata > Formulier > Random
+          cash: 1000,
+          energy: 100,
+          max_energy: 100,
+          nerve: 20,
+          max_nerve: 20,
+          strength: 10,
+          xp: 0,
+          level: 1,
+          last_updated: new Date().toISOString()
+        };
+
+        let { data: newRecord, error: createError } = await supabase
           .from('player_stats')
           .insert([
-            { 
-              id: user.id, 
-              username: metaUsername || username || defaultUsername, // Prioriteit: Metadata > Formulier > Random
-              gender: metaGender || gender || null,
-              cash: 1000,
-              energy: 100,
-              max_energy: 100,
-              nerve: 20,
-              max_nerve: 20,
-              strength: 10,
-              xp: 0,
-              level: 1,
-              last_updated: new Date().toISOString()
+            {
+              ...basePlayerStats,
+              gender: metaGender || gender || null
             }
           ])
           .select()
           .single();
+
+        // Als de kolom 'gender' nog niet bestaat in deze DB, probeer opnieuw zonder gender.
+        const genderColumnMissing =
+          createError?.code === 'PGRST204' ||
+          createError?.message?.toLowerCase().includes('gender') ||
+          createError?.details?.toLowerCase().includes('gender');
+
+        if (createError && genderColumnMissing) {
+          const retry = await supabase
+            .from('player_stats')
+            .insert([basePlayerStats])
+            .select()
+            .single();
+
+          newRecord = retry.data;
+          createError = retry.error;
+          addLog('ℹ️ Gender kon niet worden opgeslagen omdat de databasekolom ontbreekt.', 'info');
+        }
 
         if (createError) throw createError;
         data = newRecord;
