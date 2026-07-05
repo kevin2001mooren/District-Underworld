@@ -36,6 +36,9 @@ export default function App() {
   const [stats, setStats] = useState(null);
   const [logs, setLogs] = useState([]);
   const [jailTime, setJailTime] = useState(0);
+  const [showOnlineMembers, setShowOnlineMembers] = useState(false);
+  const [onlineMembers, setOnlineMembers] = useState([]);
+  const [onlineLoading, setOnlineLoading] = useState(false);
 
   // Check active session on load
   useEffect(() => {
@@ -75,6 +78,34 @@ export default function App() {
     }, 1000);
     return () => clearInterval(interval);
   }, [jailTime]);
+
+  useEffect(() => {
+    if (!showOnlineMembers || !user) return;
+
+    const fetchOnlineMembers = async () => {
+      setOnlineLoading(true);
+      const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+
+      const { data, error } = await supabase
+        .from('player_stats')
+        .select('id, username, level, last_updated')
+        .gte('last_updated', fiveMinutesAgo)
+        .order('last_updated', { ascending: false });
+
+      if (error) {
+        addLog('❌ Online leden laden mislukt.', 'error');
+        setOnlineMembers([]);
+      } else {
+        setOnlineMembers(data || []);
+      }
+
+      setOnlineLoading(false);
+    };
+
+    fetchOnlineMembers();
+    const interval = setInterval(fetchOnlineMembers, 30000);
+    return () => clearInterval(interval);
+  }, [showOnlineMembers, user]);
 
   // Activity logger helper
   const addLog = (text, type = 'info') => {
@@ -372,33 +403,38 @@ export default function App() {
       } else {
         const normalizedLoginUsername = loginUsername.trim();
 
-        // Vind eerst de exact opgeslagen gebruikersnaam via case-insensitive lookup.
-        const { data: matchedUser, error: lookupError } = await supabase
-          .from('player_stats')
-          .select('username')
-          .ilike('username', normalizedLoginUsername)
-          .maybeSingle();
+        const resolveEmailByUsername = async (candidateUsername) => {
+          const { data, error } = await supabase.rpc('login_met_gebruikersnaam', {
+            p_username: candidateUsername,
+            p_password: password
+          });
 
-        if (lookupError) {
-          throw new Error('Kon gebruikersnaam niet controleren. Probeer het opnieuw.');
+          if (error || !data || data.error || !data.email) return null;
+          return data.email;
+        };
+
+        // Probeer eerst direct met de ingevoerde gebruikersnaam.
+        let loginEmail = await resolveEmailByUsername(normalizedLoginUsername);
+
+        // Fallback: als nodig, haal case-insensitive de opgeslagen variant op en probeer opnieuw.
+        if (!loginEmail) {
+          const { data: matchedUser } = await supabase
+            .from('player_stats')
+            .select('username')
+            .ilike('username', normalizedLoginUsername)
+            .maybeSingle();
+
+          if (matchedUser?.username && matchedUser.username !== normalizedLoginUsername) {
+            loginEmail = await resolveEmailByUsername(matchedUser.username);
+          }
         }
 
-        if (!matchedUser?.username) {
+        if (!loginEmail) {
           throw new Error('Gebruikersnaam onbekend.');
         }
 
-        // Zoek via RPC het e-mailadres op basis van de gevonden gebruikersnaam
-        const { data, error } = await supabase.rpc('login_met_gebruikersnaam', { 
-          p_username: matchedUser.username,
-          p_password: password 
-        });
-
-        if (error || !data || data.error || !data.email) {
-          throw new Error(data?.error || "Gebruikersnaam onbekend.");
-        }
-
         const { error: signInError } = await supabase.auth.signInWithPassword({ 
-          email: data.email,
+          email: loginEmail,
           password 
         });
         if (signInError) throw signInError;
@@ -607,6 +643,13 @@ export default function App() {
             <p className="text-slate-400">Ingelogd als:</p>
             <p className="text-rose-400 font-bold">{stats?.username ? formatDisplayUsername(stats.username) : email}</p>
           </div>
+          <button
+            onClick={() => setShowOnlineMembers(prev => !prev)}
+            className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
+            title="Toon online leden"
+          >
+            {showOnlineMembers ? 'Verberg leden' : 'Online leden'}
+          </button>
           <button 
             onClick={handleLogout}
             className="p-2 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition"
@@ -771,6 +814,30 @@ export default function App() {
 
         {/* GAME LOGS (Right 7 Cols) */}
         <section className="lg:col-span-7 flex flex-col gap-6">
+          {showOnlineMembers && (
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl">
+              <div className="flex justify-between items-center mb-3">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">🟢 Online leden</h3>
+                <span className="text-xs text-slate-500">{onlineMembers.length} online</span>
+              </div>
+
+              {onlineLoading ? (
+                <p className="text-xs text-slate-400">Online leden laden...</p>
+              ) : onlineMembers.length === 0 ? (
+                <p className="text-xs text-slate-500">Er zijn nu geen leden online.</p>
+              ) : (
+                <div className="space-y-2.5">
+                  {onlineMembers.map((member) => (
+                    <div key={member.id} className="bg-slate-950 border border-slate-850 rounded-xl p-3 flex justify-between items-center">
+                      <span className="text-sm text-slate-200 font-semibold">{formatDisplayUsername(member.username || 'Onbekend')}</span>
+                      <span className="text-xs text-slate-400 font-mono">Level {member.level || 1}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl flex-grow flex flex-col">
             <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-4">
               📋 Activiteitenlogboek
