@@ -17,11 +17,16 @@ const getEmailRedirectUrl = () => {
   const isLocalhost = host === 'localhost' || host === '127.0.0.1';
   return isLocalhost ? APP_PUBLIC_URL : `${window.location.origin}/`;
 };
+const ADMIN_EMAILS = ['kevin2001mooren@gmail.com'];
+const VALID_ROLES = ['admin', 'moderator', 'helper', 'lid'];
+const STAFF_ROLES = ['admin', 'moderator', 'helper'];
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const NAV_TABS = ['overzicht', 'mijn items', 'woning', 'stad', 'misdaad', 'sporten', 'reizen'];
 
 export default function App() {
   const [user, setUser] = useState(null);
+  const [userRole, setUserRole] = useState('lid');
   const [loading, setLoading] = useState(true);
   const [authLoading, setAuthLoading] = useState(false);
   const [email, setEmail] = useState('');
@@ -37,14 +42,43 @@ export default function App() {
   const [stats, setStats] = useState(null);
   const [logs, setLogs] = useState([]);
   const [jailTime, setJailTime] = useState(0);
-  const [showOnlineMembers, setShowOnlineMembers] = useState(false);
+  const [activeTab, setActiveTab] = useState('overzicht');
+  const [currentView, setCurrentView] = useState('game');
   const [onlineMembers, setOnlineMembers] = useState([]);
   const [onlineLoading, setOnlineLoading] = useState(false);
+  const [selectedMemberProfile, setSelectedMemberProfile] = useState(null);
+  const [adminMembers, setAdminMembers] = useState([]);
+  const [adminLoading, setAdminLoading] = useState(false);
+  const [adminActionLoadingId, setAdminActionLoadingId] = useState(null);
+
+  const normalizeRole = (value) => {
+    const roleValue = (value || '').toString().trim().toLowerCase();
+    return VALID_ROLES.includes(roleValue) ? roleValue : 'lid';
+  };
+
+  const refreshAdminMembers = async () => {
+    const { data, error } = await supabase
+      .from('player_stats')
+      .select('*')
+      .order('level', { ascending: false });
+
+    if (error) throw error;
+    setAdminMembers(data || []);
+  };
+
+  const resolveUserRole = (authUser) => {
+    if (!authUser) return 'lid';
+    const metadataRole = normalizeRole(authUser.user_metadata?.role);
+    if (metadataRole !== 'lid') return metadataRole;
+    const emailValue = (authUser.email || '').toLowerCase();
+    return ADMIN_EMAILS.includes(emailValue) ? 'admin' : 'lid';
+  };
 
   // Check active session on load
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setUser(session?.user ?? null);
+      setUserRole(resolveUserRole(session?.user));
       if (session?.user) {
         fetchPlayerStats(session.user);
       } else {
@@ -54,9 +88,12 @@ export default function App() {
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null);
+      setUserRole(resolveUserRole(session?.user));
       if (session?.user) {
         fetchPlayerStats(session.user);
       } else {
+        setSelectedMemberProfile(null);
+        setCurrentView('game');
         setStats(null);
         setLoading(false);
       }
@@ -64,6 +101,24 @@ export default function App() {
 
     return () => subscription.unsubscribe();
   }, []);
+
+  useEffect(() => {
+    if (currentView !== 'admin' || !STAFF_ROLES.includes(userRole)) return;
+
+    const fetchAdminMembersForPage = async () => {
+      setAdminLoading(true);
+      try {
+        await refreshAdminMembers();
+      } catch (_error) {
+        addLog('❌ Admin leden laden mislukt.', 'error');
+        setAdminMembers([]);
+      } finally {
+        setAdminLoading(false);
+      }
+    };
+
+    fetchAdminMembersForPage();
+  }, [currentView, userRole]);
 
   // Jail Timer countdown logic
   useEffect(() => {
@@ -81,7 +136,7 @@ export default function App() {
   }, [jailTime]);
 
   useEffect(() => {
-    if (!showOnlineMembers || !user) return;
+    if (currentView !== 'online-members' || !user) return;
 
     const fetchOnlineMembers = async () => {
       setOnlineLoading(true);
@@ -89,7 +144,7 @@ export default function App() {
 
       const { data, error } = await supabase
         .from('player_stats')
-        .select('id, username, level, last_updated')
+        .select('id, username, level, gender, cash, strength, xp, last_updated')
         .gte('last_updated', fiveMinutesAgo)
         .order('last_updated', { ascending: false });
 
@@ -106,7 +161,7 @@ export default function App() {
     fetchOnlineMembers();
     const interval = setInterval(fetchOnlineMembers, 30000);
     return () => clearInterval(interval);
-  }, [showOnlineMembers, user]);
+  }, [currentView, user]);
 
   // Activity logger helper
   const addLog = (text, type = 'info') => {
@@ -174,6 +229,9 @@ export default function App() {
       }
 
       if (data) {
+        const dbRole = normalizeRole(data.role);
+        const fallbackRole = resolveUserRole(user);
+        setUserRole(dbRole !== 'lid' ? dbRole : fallbackRole);
         calculateOfflineRecovery(data);
       }
     } catch (err) {
@@ -466,10 +524,118 @@ export default function App() {
   };
 
   const handleLogout = () => {
+    setSelectedMemberProfile(null);
+    setCurrentView('game');
     supabase.auth.signOut();
   };
 
+  const performAdminAction = async (member, action) => {
+    if (!STAFF_ROLES.includes(userRole)) return;
+
+    try {
+      setAdminActionLoadingId(member.id);
+
+      if (action === 'cash') {
+        if (userRole !== 'admin' && userRole !== 'moderator') {
+          throw new Error('Alleen admins en moderators mogen cash geven.');
+        }
+        const { error } = await supabase.rpc('admin_apply_action', {
+          p_target_id: member.id,
+          p_action: 'cash'
+        });
+        if (error) throw error;
+        addLog(`🛠️ Admin: ${formatDisplayUsername(member.username)} kreeg +$1.000.`, 'success');
+      }
+
+      if (action === 'recover') {
+        if (!STAFF_ROLES.includes(userRole)) {
+          throw new Error('Geen rechten voor herstelactie.');
+        }
+        const { error } = await supabase.rpc('admin_apply_action', {
+          p_target_id: member.id,
+          p_action: 'recover'
+        });
+        if (error) throw error;
+        addLog(`🛠️ Admin: ${formatDisplayUsername(member.username)} volledig hersteld.`, 'success');
+      }
+
+      if (action.startsWith('set-role:')) {
+        if (userRole !== 'admin') {
+          throw new Error('Alleen admins mogen rollen wijzigen.');
+        }
+        const nextRole = normalizeRole(action.replace('set-role:', ''));
+
+        if (member.id === user?.id && nextRole !== 'admin') {
+          throw new Error('Je kunt je eigen adminrechten niet verwijderen.');
+        }
+
+        const { error } = await supabase.rpc('admin_apply_action', {
+          p_target_id: member.id,
+          p_action: `set-role:${nextRole}`
+        });
+
+        if (error) {
+          const rpcMessage = (error.message || '').toLowerCase();
+          if (rpcMessage.includes('function') && rpcMessage.includes('admin_apply_action')) {
+            throw new Error("RPC 'admin_apply_action' ontbreekt. Voeg de SQL setup toe in Supabase SQL Editor.");
+          }
+          throw error;
+        }
+
+        addLog(`🛠️ Rol aangepast: ${formatDisplayUsername(member.username)} is nu ${nextRole}.`, 'success');
+      }
+
+      await refreshAdminMembers();
+    } catch (err) {
+      addLog(`❌ Admin actie mislukt: ${err.message}`, 'error');
+    } finally {
+      setAdminActionLoadingId(null);
+    }
+  };
+
+  const renderTopTabs = () => (
+    <div className="bg-slate-900 border-b border-slate-800 px-6 py-2 grid grid-cols-7 gap-2 w-full">
+      {NAV_TABS.map((tab) => (
+        <button
+          key={tab}
+          onClick={() => {
+            setActiveTab(tab);
+            setCurrentView('game');
+          }}
+          className={`w-full px-3 py-1 rounded-lg text-base font-bold border transition ${
+            activeTab === tab
+              ? 'bg-rose-600 text-white border-rose-500/20'
+              : 'bg-slate-950 text-slate-300 border-slate-800 hover:bg-slate-800 hover:text-white'
+          }`}
+        >
+          {tab.charAt(0).toUpperCase() + tab.slice(1)}
+        </button>
+      ))}
+    </div>
+  );
+
   // Loader screen
+  const canOpenStaffPanel = STAFF_ROLES.includes(userRole);
+  const canManageRoles = userRole === 'admin';
+  const canGiveCash = userRole === 'admin' || userRole === 'moderator';
+  const canRecover = STAFF_ROLES.includes(userRole);
+
+  const roleLabel = (value) => {
+    const role = normalizeRole(value);
+    if (role === 'admin') return 'Admin';
+    if (role === 'moderator') return 'Moderator';
+    if (role === 'helper') return 'Helper';
+    return 'Lid';
+  };
+
+  const roleColorClass = (value) => {
+    const role = normalizeRole(value);
+    if (role === 'admin') return 'text-rose-400 font-semibold';
+    if (role === 'moderator') return 'text-amber-400 font-semibold';
+    if (role === 'helper') return 'text-sky-400 font-semibold';
+    return 'text-slate-500';
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-950 flex flex-col justify-center items-center">
@@ -627,6 +793,303 @@ export default function App() {
     );
   }
 
+  if (currentView === 'profile') {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
+        <header className="bg-slate-900 border-b border-slate-800 py-4 px-6 flex flex-wrap justify-between items-center gap-4">
+          <div className="flex items-center gap-3">
+            <Skull className="h-6 w-6 text-rose-500" />
+            <div>
+              <h1 className="text-base font-bold text-white leading-tight">Mijn Profiel</h1>
+              <p className="text-[10px] text-slate-400 font-mono">District Underworld profielpagina</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {canOpenStaffPanel && (
+              <button
+                onClick={() => setCurrentView('admin')}
+                className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
+                title="Open admin functies"
+              >
+                Admin
+              </button>
+            )}
+            <button
+              onClick={() => setCurrentView('online-members')}
+              className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
+              title="Toon online leden"
+            >
+              Online leden
+            </button>
+            <button
+              onClick={handleLogout}
+              className="p-2 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition"
+              title="Log uit"
+            >
+              <LogOut className="h-4 w-4" />
+            </button>
+          </div>
+        </header>
+
+        {renderTopTabs()}
+
+        <main className="flex-grow p-6">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl max-w-2xl mx-auto">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-4">👤 Mijn profiel</h3>
+            <div className="bg-slate-950 border border-slate-850 rounded-xl p-4 space-y-2.5 text-sm">
+              <p className="text-slate-300"><span className="text-slate-500">Gebruikersnaam:</span> {stats?.username ? formatDisplayUsername(stats.username) : 'Onbekend'}</p>
+              <p className="text-slate-300"><span className="text-slate-500">E-mail:</span> {user?.email || email || 'Onbekend'}</p>
+              <p className="text-slate-300"><span className="text-slate-500">Gender:</span> {formatGenderLabel(stats?.gender)}</p>
+              <p className="text-slate-300"><span className="text-slate-500">Level:</span> {stats?.level || 1}</p>
+            </div>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  if (currentView === 'admin' && canOpenStaffPanel) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
+        <header className="bg-slate-900 border-b border-slate-800 py-4 px-6 flex flex-wrap justify-between items-center gap-4">
+          <div className="flex items-center gap-3">
+            <Shield className="h-6 w-6 text-rose-500" />
+            <div>
+              <h1 className="text-base font-bold text-white leading-tight">Staff Functies</h1>
+              <p className="text-[10px] text-slate-400 font-mono">Beheer spelers op basis van je rol</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setCurrentView('online-members')}
+              className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
+              title="Toon online leden"
+            >
+              Online leden
+            </button>
+            <button
+              onClick={handleLogout}
+              className="p-2 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition"
+              title="Log uit"
+            >
+              <LogOut className="h-4 w-4" />
+            </button>
+          </div>
+        </header>
+
+        {renderTopTabs()}
+
+        <main className="flex-grow p-6">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl max-w-4xl mx-auto">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-4">🛠️ Spelerbeheer</h3>
+
+            {adminLoading ? (
+              <p className="text-xs text-slate-400">Spelers laden...</p>
+            ) : adminMembers.length === 0 ? (
+              <p className="text-xs text-slate-500">Geen spelers gevonden.</p>
+            ) : (
+              <div className="space-y-2.5">
+                {adminMembers.map((member) => (
+                  <div key={member.id} className="bg-slate-950 border border-slate-850 rounded-xl p-3">
+                    <div className="flex justify-between items-center gap-3">
+                      <div>
+                        <p className="text-sm font-semibold text-slate-200">{formatDisplayUsername(member.username || 'Onbekend')}</p>
+                        <p className="text-xs text-slate-400">
+                          Level {member.level || 1} • ${member.cash?.toLocaleString() || 0}
+                          {' • '}
+                          <span className={roleColorClass(member.role)}>
+                            {roleLabel(member.role)}
+                          </span>
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {canManageRoles && (
+                          <>
+                            <button
+                              onClick={() => performAdminAction(member, 'set-role:lid')}
+                              disabled={adminActionLoadingId === member.id || normalizeRole(member.role) === 'lid'}
+                              className="px-2 py-1 rounded-lg text-xs border border-slate-800 bg-slate-900 hover:bg-slate-800 text-slate-200"
+                            >
+                              Lid
+                            </button>
+                            <button
+                              onClick={() => performAdminAction(member, 'set-role:helper')}
+                              disabled={adminActionLoadingId === member.id || normalizeRole(member.role) === 'helper'}
+                              className="px-2 py-1 rounded-lg text-xs border border-slate-800 bg-slate-900 hover:bg-slate-800 text-slate-200"
+                            >
+                              Helper
+                            </button>
+                            <button
+                              onClick={() => performAdminAction(member, 'set-role:moderator')}
+                              disabled={adminActionLoadingId === member.id || normalizeRole(member.role) === 'moderator'}
+                              className="px-2 py-1 rounded-lg text-xs border border-slate-800 bg-slate-900 hover:bg-slate-800 text-slate-200"
+                            >
+                              Mod
+                            </button>
+                            <button
+                              onClick={() => performAdminAction(member, 'set-role:admin')}
+                              disabled={adminActionLoadingId === member.id || normalizeRole(member.role) === 'admin'}
+                              className="px-2 py-1 rounded-lg text-xs border border-slate-800 bg-slate-900 hover:bg-slate-800 text-slate-200"
+                            >
+                              Admin
+                            </button>
+                          </>
+                        )}
+                        <button
+                          onClick={() => performAdminAction(member, 'cash')}
+                          disabled={adminActionLoadingId === member.id || !canGiveCash}
+                          className="px-2 py-1 rounded-lg text-xs border border-slate-800 bg-slate-900 hover:bg-slate-800 text-slate-200"
+                        >
+                          +$1.000
+                        </button>
+                        <button
+                          onClick={() => performAdminAction(member, 'recover')}
+                          disabled={adminActionLoadingId === member.id || !canRecover}
+                          className="px-2 py-1 rounded-lg text-xs border border-slate-800 bg-slate-900 hover:bg-slate-800 text-slate-200"
+                        >
+                          Herstel
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  if (currentView === 'online-members') {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
+        <header className="bg-slate-900 border-b border-slate-800 py-4 px-6 flex flex-wrap justify-between items-center gap-4">
+          <div className="flex items-center gap-3">
+            <Skull className="h-6 w-6 text-rose-500" />
+            <div>
+              <h1 className="text-base font-bold text-white leading-tight">Online Leden</h1>
+              <p className="text-[10px] text-slate-400 font-mono">District Underworld ledenpagina</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {canOpenStaffPanel && (
+              <button
+                onClick={() => setCurrentView('admin')}
+                className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
+                title="Open admin functies"
+              >
+                Admin
+              </button>
+            )}
+            <button
+              onClick={() => setCurrentView('online-members')}
+              className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
+              title="Toon online leden"
+            >
+              Online leden
+            </button>
+            <button
+              onClick={handleLogout}
+              className="p-2 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition"
+              title="Log uit"
+            >
+              <LogOut className="h-4 w-4" />
+            </button>
+          </div>
+        </header>
+
+        {renderTopTabs()}
+
+        <main className="flex-grow p-6">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl max-w-3xl mx-auto">
+            <div className="flex justify-between items-center mb-3">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">🟢 Online leden</h3>
+              <span className="text-xs text-slate-500">{onlineMembers.length} online</span>
+            </div>
+
+            {onlineLoading ? (
+              <p className="text-xs text-slate-400">Online leden laden...</p>
+            ) : onlineMembers.length === 0 ? (
+              <p className="text-xs text-slate-500">Er zijn nu geen leden online.</p>
+            ) : (
+              <div className="space-y-2.5">
+                {onlineMembers.map((member) => (
+                  <button
+                    key={member.id}
+                    onClick={() => {
+                      setSelectedMemberProfile(member);
+                      setCurrentView('member-profile');
+                    }}
+                    className="w-full text-left bg-slate-950 border border-slate-850 rounded-xl p-3 flex justify-between items-center hover:bg-slate-800 transition"
+                    title="Open profiel"
+                  >
+                    <span className="text-sm text-slate-200 font-semibold">{formatDisplayUsername(member.username || 'Onbekend')}</span>
+                    <span className="text-xs text-slate-400 font-mono">Level {member.level || 1}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  if (currentView === 'member-profile' && selectedMemberProfile) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
+        <header className="bg-slate-900 border-b border-slate-800 py-4 px-6 flex flex-wrap justify-between items-center gap-4">
+          <div className="flex items-center gap-3">
+            <Skull className="h-6 w-6 text-rose-500" />
+            <div>
+              <h1 className="text-base font-bold text-white leading-tight">Spelerprofiel</h1>
+              <p className="text-[10px] text-slate-400 font-mono">Profiel van online lid</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {canOpenStaffPanel && (
+              <button
+                onClick={() => setCurrentView('admin')}
+                className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
+                title="Open admin functies"
+              >
+                Admin
+              </button>
+            )}
+            <button
+              onClick={() => setCurrentView('online-members')}
+              className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
+              title="Toon online leden"
+            >
+              Online leden
+            </button>
+            <button
+              onClick={handleLogout}
+              className="p-2 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition"
+              title="Log uit"
+            >
+              <LogOut className="h-4 w-4" />
+            </button>
+          </div>
+        </header>
+
+        {renderTopTabs()}
+
+        <main className="flex-grow p-6">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl max-w-2xl mx-auto">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-4">👤 {formatDisplayUsername(selectedMemberProfile.username || 'Onbekend')}</h3>
+            <div className="bg-slate-950 border border-slate-850 rounded-xl p-4 space-y-2.5 text-sm">
+              <p className="text-slate-300"><span className="text-slate-500">Gebruikersnaam:</span> {formatDisplayUsername(selectedMemberProfile.username || 'Onbekend')}</p>
+              <p className="text-slate-300"><span className="text-slate-500">Gender:</span> {formatGenderLabel(selectedMemberProfile.gender)}</p>
+              <p className="text-slate-300"><span className="text-slate-500">Level:</span> {selectedMemberProfile.level || 1}</p>
+            </div>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
   // Active Game Dashboard
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
@@ -642,14 +1105,36 @@ export default function App() {
         <div className="flex items-center gap-4">
           <div className="text-right text-xs">
             <p className="text-slate-400">Ingelogd als:</p>
-            <p className="text-rose-400 font-bold">{stats?.username ? formatDisplayUsername(stats.username) : email}</p>
+            <button
+              onClick={() => setCurrentView('profile')}
+              className="text-rose-400 font-bold hover:underline"
+              title="Open mijn profiel"
+            >
+              {stats?.username ? formatDisplayUsername(stats.username) : email}
+            </button>
           </div>
+            {canOpenStaffPanel && (
+              <button
+                onClick={() => setCurrentView('admin')}
+                className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
+                title="Open admin functies"
+              >
+                Admin
+              </button>
+            )}
           <button
-            onClick={() => setShowOnlineMembers(prev => !prev)}
+            onClick={() => setCurrentView('profile')}
+            className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
+            title="Toon mijn profiel"
+          >
+            Mijn profiel
+          </button>
+          <button
+            onClick={() => setCurrentView('online-members')}
             className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
             title="Toon online leden"
           >
-            {showOnlineMembers ? 'Verberg leden' : 'Online leden'}
+            Online leden
           </button>
           <button 
             onClick={handleLogout}
@@ -660,6 +1145,8 @@ export default function App() {
           </button>
         </div>
       </header>
+
+      {renderTopTabs()}
 
       {/* GAME SECTION */}
       <main className="flex-grow grid grid-cols-1 lg:grid-cols-12 gap-6 p-6 overflow-y-auto">
@@ -815,30 +1302,6 @@ export default function App() {
 
         {/* GAME LOGS (Right 7 Cols) */}
         <section className="lg:col-span-7 flex flex-col gap-6">
-          {showOnlineMembers && (
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl">
-              <div className="flex justify-between items-center mb-3">
-                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">🟢 Online leden</h3>
-                <span className="text-xs text-slate-500">{onlineMembers.length} online</span>
-              </div>
-
-              {onlineLoading ? (
-                <p className="text-xs text-slate-400">Online leden laden...</p>
-              ) : onlineMembers.length === 0 ? (
-                <p className="text-xs text-slate-500">Er zijn nu geen leden online.</p>
-              ) : (
-                <div className="space-y-2.5">
-                  {onlineMembers.map((member) => (
-                    <div key={member.id} className="bg-slate-950 border border-slate-850 rounded-xl p-3 flex justify-between items-center">
-                      <span className="text-sm text-slate-200 font-semibold">{formatDisplayUsername(member.username || 'Onbekend')}</span>
-                      <span className="text-xs text-slate-400 font-mono">Level {member.level || 1}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl flex-grow flex flex-col">
             <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-4">
               📋 Activiteitenlogboek
