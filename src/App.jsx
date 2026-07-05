@@ -11,6 +11,12 @@ import { Shield, Skull, Zap, Swords, Coins, User, Lock, LogOut, Loader2, Award, 
 const SUPABASE_URL = "https://utqwbqymcbgoqunpjfff.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InV0cXdicXltY2Jnb3F1bnBqZmZmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMTAyMTUsImV4cCI6MjA5ODc4NjIxNX0.jirvlYKUSSmXDT-OC50zOR5TKVYEwT8NFAIFOBGhxSY";
 
+const getEmailRedirectUrl = () => {
+  const host = window.location.hostname;
+  const isLocalhost = host === 'localhost' || host === '127.0.0.1';
+  return isLocalhost ? null : `${window.location.origin}/`;
+};
+
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 export default function App() {
@@ -318,7 +324,7 @@ export default function App() {
           email, 
           password,
           options: {
-            emailRedirectTo: `${window.location.origin}/`,
+            ...(getEmailRedirectUrl() ? { emailRedirectTo: getEmailRedirectUrl() } : {}),
             data: { username: normalizedUsername }
           }
         });
@@ -384,11 +390,16 @@ export default function App() {
     } catch (err) {
       const rawMessage = err?.message || 'Inloggen mislukt. Controleer je gebruikersnaam en wachtwoord.';
       const lowerMessage = rawMessage.toLowerCase();
+      const emailNotConfirmed =
+        lowerMessage.includes('email not confirmed') ||
+        lowerMessage.includes('email_not_confirmed') ||
+        lowerMessage.includes('confirm your email');
+
       const normalizedMessage = lowerMessage.includes('invalid login credentials')
         ? 'Gebruikersnaam of wachtwoord is onjuist.'
         : lowerMessage.includes('already registered')
           ? 'Dit e-mailadres is al in gebruik.'
-          : lowerMessage.includes('email not confirmed')
+          : emailNotConfirmed
             ? 'Bevestig eerst je e-mailadres via de link in je inbox.'
           : rawMessage;
 
@@ -493,7 +504,7 @@ export default function App() {
                 <Lock className="absolute left-3 top-2.5 h-4 w-4 text-slate-500" />
                 <input 
                   type="password" 
-                  placeholder="••••••••••••" 
+                  placeholder="Wachtwoord" 
                   value={password}
                   onChange={(e) => {
                     setPassword(e.target.value);
