@@ -399,6 +399,8 @@ export default function App() {
         ? 'Gebruikersnaam of wachtwoord is onjuist.'
         : lowerMessage.includes('already registered')
           ? 'Dit e-mailadres is al in gebruik.'
+          : lowerMessage.includes('email rate limit exceeded')
+            ? 'Je hebt te vaak een bevestigingsmail aangevraagd. Wacht even en probeer het later opnieuw.'
           : emailNotConfirmed
             ? 'Bevestig eerst je e-mailadres via de link in je inbox.'
           : rawMessage;
