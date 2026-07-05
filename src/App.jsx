@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import './Game.css';
 // We importen Supabase nu direct via een universele ESM CDN om bundler-fouten in de preview te voorkomen
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { Shield, Skull, Zap, Swords, Coins, User, Lock, LogOut, Loader2, Award, Clock } from 'lucide-react';
@@ -19,6 +20,9 @@ export default function App() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [username, setUsername] = useState('');
+  const [loginUsername, setLoginUsername] = useState('');
+  const [authError, setAuthError] = useState('');
+  const [authSuccess, setAuthSuccess] = useState('');
   const [isRegistering, setIsRegistering] = useState(false);
 
   // Game state
@@ -71,6 +75,13 @@ export default function App() {
     setLogs(prev => [{ time, text, type }, ...prev].slice(0, 15));
   };
 
+  const formatDisplayUsername = (value) => {
+    if (!value || typeof value !== 'string') return value;
+    const trimmed = value.trim();
+    if (!trimmed) return trimmed;
+    return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
+  };
+
   // Fetch or initialize player stats in database
   const fetchPlayerStats = async (user) => {
     try {
@@ -109,7 +120,7 @@ export default function App() {
 
         if (createError) throw createError;
         data = newRecord;
-        addLog(`🆕 Karakter aangemaakt! Welkom in het District, ${data.username}!`, 'success');
+        addLog(`🆕 Karakter aangemaakt! Welkom in het District, ${formatDisplayUsername(data.username)}!`, 'success');
       } else if (error) {
         throw error;
       }
@@ -274,26 +285,104 @@ export default function App() {
 
   const handleAuth = async (e) => {
     e.preventDefault();
-    if (!email || !password) return;
+    setAuthError('');
+    setAuthSuccess('');
+
+    if (isRegistering) {
+      if (!email || !password || !username) return;
+    } else {
+      if (!loginUsername || !password) return;
+    }
+
     setAuthLoading(true);
 
     try {
       if (isRegistering) {
-        const { error } = await supabase.auth.signUp({ 
+        const normalizedUsername = username.trim();
+
+        const { data: existingUsers, error: usernameCheckError } = await supabase
+          .from('player_stats')
+          .select('id')
+          .ilike('username', normalizedUsername)
+          .limit(1);
+
+        if (usernameCheckError) {
+          throw new Error('Kon gebruikersnaam niet controleren. Probeer het opnieuw.');
+        }
+
+        if (existingUsers && existingUsers.length > 0) {
+          throw new Error('Deze gebruikersnaam bestaat al. Kies een andere.');
+        }
+
+        const { data: signUpData, error } = await supabase.auth.signUp({ 
           email, 
           password,
           options: {
-            data: { username }
+            data: { username: normalizedUsername }
           }
         });
+
+        if (error?.message?.toLowerCase().includes('already registered')) {
+          throw new Error('Dit e-mailadres is al in gebruik.');
+        }
+
         if (error) throw error;
-        addLog("✉️ Verificatie-mail verzonden! Check je inbox.", "info");
+
+        // Supabase kan bij duplicate email soms geen error geven maar wel een user zonder identities.
+        if (signUpData?.user && Array.isArray(signUpData.user.identities) && signUpData.user.identities.length === 0) {
+          throw new Error('Dit e-mailadres is al in gebruik.');
+        }
+
+        addLog("✅ Account aangemaakt! Je kunt nu inloggen.", "success");
+        setAuthSuccess('Account aangemaakt. Je kunt nu inloggen met je gebruikersnaam en wachtwoord.');
+        setIsRegistering(false);
+        setLoginUsername(normalizedUsername);
+        setPassword('');
       } else {
-        const { error } = await supabase.auth.signInWithPassword({ email, password });
-        if (error) throw error;
+        const normalizedLoginUsername = loginUsername.trim();
+
+        // Vind eerst de exact opgeslagen gebruikersnaam via case-insensitive lookup.
+        const { data: matchedUser, error: lookupError } = await supabase
+          .from('player_stats')
+          .select('username')
+          .ilike('username', normalizedLoginUsername)
+          .maybeSingle();
+
+        if (lookupError) {
+          throw new Error('Kon gebruikersnaam niet controleren. Probeer het opnieuw.');
+        }
+
+        if (!matchedUser?.username) {
+          throw new Error('Gebruikersnaam onbekend.');
+        }
+
+        // Zoek via RPC het e-mailadres op basis van de gevonden gebruikersnaam
+        const { data, error } = await supabase.rpc('login_met_gebruikersnaam', { 
+          p_username: matchedUser.username,
+          p_password: password 
+        });
+
+        if (error || !data || data.error || !data.email) {
+          throw new Error(data?.error || "Gebruikersnaam onbekend.");
+        }
+
+        const { error: signInError } = await supabase.auth.signInWithPassword({ 
+          email: data.email,
+          password 
+        });
+        if (signInError) throw signInError;
       }
     } catch (err) {
-      addLog(`❌ Fout: ${err.message}`, "error");
+      const rawMessage = err?.message || 'Inloggen mislukt. Controleer je gebruikersnaam en wachtwoord.';
+      const lowerMessage = rawMessage.toLowerCase();
+      const normalizedMessage = lowerMessage.includes('invalid login credentials')
+        ? 'Gebruikersnaam of wachtwoord is onjuist.'
+        : lowerMessage.includes('already registered')
+          ? 'Dit e-mailadres is al in gebruik.'
+          : rawMessage;
+
+      setAuthError(normalizedMessage);
+      addLog(`❌ Fout: ${normalizedMessage}`, "error");
     } finally {
       setAuthLoading(false);
     }
@@ -338,7 +427,10 @@ export default function App() {
                     type="text" 
                     placeholder="bijv. Capone_23" 
                     value={username}
-                    onChange={(e) => setUsername(e.target.value)}
+                    onChange={(e) => {
+                      setUsername(e.target.value);
+                      setAuthError('');
+                    }}
                     className="w-full bg-slate-950 border border-slate-850 rounded-xl py-2 pl-10 pr-4 text-sm text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-rose-500 transition"
                     required
                   />
@@ -346,20 +438,43 @@ export default function App() {
               </div>
             )}
 
-            <div>
-              <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">E-mailadres</label>
-              <div className="relative">
-                <User className="absolute left-3 top-2.5 h-4 w-4 text-slate-500" />
-                <input 
-                  type="email" 
-                  placeholder="jouw-email@syndicate.com" 
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-850 rounded-xl py-2 pl-10 pr-4 text-sm text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-rose-500 transition"
-                  required
-                />
+            {isRegistering ? (
+              <div>
+                <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">E-mailadres</label>
+                <div className="relative">
+                  <User className="absolute left-3 top-2.5 h-4 w-4 text-slate-500" />
+                  <input 
+                    type="email" 
+                    placeholder="jouw-email@syndicate.com" 
+                    value={email}
+                    onChange={(e) => {
+                      setEmail(e.target.value);
+                      setAuthError('');
+                    }}
+                    className="w-full bg-slate-950 border border-slate-850 rounded-xl py-2 pl-10 pr-4 text-sm text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-rose-500 transition"
+                    required
+                  />
+                </div>
               </div>
-            </div>
+            ) : (
+              <div>
+                <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Gebruikersnaam</label>
+                <div className="relative">
+                  <User className="absolute left-3 top-2.5 h-4 w-4 text-slate-500" />
+                  <input 
+                    type="text"
+                    placeholder="bijv. Capone_23"
+                    value={loginUsername}
+                    onChange={(e) => {
+                      setLoginUsername(e.target.value);
+                      setAuthError('');
+                    }}
+                    className="w-full bg-slate-950 border border-slate-850 rounded-xl py-2 pl-10 pr-4 text-sm text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-rose-500 transition"
+                    required
+                  />
+                </div>
+              </div>
+            )}
 
             <div>
               <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Wachtwoord</label>
@@ -369,7 +484,10 @@ export default function App() {
                   type="password" 
                   placeholder="••••••••••••" 
                   value={password}
-                  onChange={(e) => setPassword(e.target.value)}
+                  onChange={(e) => {
+                    setPassword(e.target.value);
+                    setAuthError('');
+                  }}
                   className="w-full bg-slate-950 border border-slate-850 rounded-xl py-2 pl-10 pr-4 text-sm text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-rose-500 transition"
                   required
                 />
@@ -383,13 +501,25 @@ export default function App() {
             >
               {authLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : isRegistering ? "Karakter Aanmaken" : "Betreed Underworld"}
             </button>
+
+              {!isRegistering && authSuccess && (
+                <p className="text-xs text-emerald-400 bg-slate-950 border border-slate-800 rounded-xl p-3">
+                  {authSuccess}
+                </p>
+              )}
+
+              {authError && (
+                <p className="text-xs text-red-400 bg-red-950/40 border border-red-800/40 rounded-xl p-3">
+                  {authError}
+                </p>
+              )}
           </form>
 
           <div className="mt-6 text-center text-xs text-slate-500">
             {isRegistering ? (
-              <p>Heb je al een syndicaat? <button onClick={() => setIsRegistering(false)} className="text-rose-400 font-medium hover:underline">Log In</button></p>
+              <p>Heb je al een syndicaat? <button onClick={() => { setIsRegistering(false); setAuthError(''); }} className="text-rose-400 font-medium hover:underline">Log In</button></p>
             ) : (
-              <p>Eerste dag op straat? <button onClick={() => setIsRegistering(true)} className="text-rose-400 font-medium hover:underline">Registreer hier</button></p>
+              <p>Eerste dag op straat? <button onClick={() => { setIsRegistering(true); setAuthSuccess(''); setAuthError(''); }} className="text-rose-400 font-medium hover:underline">Registreer hier</button></p>
             )}
           </div>
         </div>
@@ -412,7 +542,7 @@ export default function App() {
         <div className="flex items-center gap-4">
           <div className="text-right text-xs">
             <p className="text-slate-400">Ingelogd als:</p>
-            <p className="text-rose-400 font-bold">{stats?.username || email}</p>
+            <p className="text-rose-400 font-bold">{stats?.username ? formatDisplayUsername(stats.username) : email}</p>
           </div>
           <button 
             onClick={handleLogout}
@@ -435,7 +565,7 @@ export default function App() {
             
             <div className="flex justify-between items-start mb-6">
               <div>
-                <h2 className="text-xl font-bold text-white tracking-tight">{stats?.username || "Petty Criminal"}</h2>
+                <h2 className="text-xl font-bold text-white tracking-tight">{stats?.username ? formatDisplayUsername(stats.username) : "Petty Criminal"}</h2>
                 <span className="text-xs bg-slate-800 text-slate-300 px-2.5 py-1 rounded font-mono block mt-1 w-fit">
                   Level {stats?.level || 1} • Kruimeldief
                 </span>
