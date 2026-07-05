@@ -1,0 +1,608 @@
+import React, { useState, useEffect } from 'react';
+// We importen Supabase nu direct via een universele ESM CDN om bundler-fouten in de preview te voorkomen
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { Shield, Skull, Zap, Swords, Coins, User, Lock, LogOut, Loader2, Award, Clock } from 'lucide-react';
+
+// =========================================================
+// ⚠️ VERVANG DEZE TWEE CODES HIERONDER MET JOUW EIGEN KEYS!
+// Je vindt deze in Supabase onder: Settings (tandwiel) -> API
+// =========================================================
+const SUPABASE_URL = "https://utqwbqymcbgoqunpjfff.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InV0cXdicXltY2Jnb3F1bnBqZmZmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMTAyMTUsImV4cCI6MjA5ODc4NjIxNX0.jirvlYKUSSmXDT-OC50zOR5TKVYEwT8NFAIFOBGhxSY";
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [authLoading, setAuthLoading] = useState(false);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [username, setUsername] = useState('');
+  const [isRegistering, setIsRegistering] = useState(false);
+
+  // Game state
+  const [stats, setStats] = useState(null);
+  const [logs, setLogs] = useState([]);
+  const [jailTime, setJailTime] = useState(0);
+
+  // Check active session on load
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user ?? null);
+      if (session?.user) {
+        fetchPlayerStats(session.user);
+      } else {
+        setLoading(false);
+      }
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+      if (session?.user) {
+        fetchPlayerStats(session.user);
+      } else {
+        setStats(null);
+        setLoading(false);
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  // Jail Timer countdown logic
+  useEffect(() => {
+    if (jailTime <= 0) return;
+    const interval = setInterval(() => {
+      setJailTime(prev => {
+        if (prev <= 1) {
+          addLog("🔓 Je hebt je straf uitgezeten! Je bent weer een vrij man.", "success");
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [jailTime]);
+
+  // Activity logger helper
+  const addLog = (text, type = 'info') => {
+    const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    setLogs(prev => [{ time, text, type }, ...prev].slice(0, 15));
+  };
+
+  // Fetch or initialize player stats in database
+  const fetchPlayerStats = async (user) => {
+    try {
+      setLoading(true);
+      
+      // Haal de naam uit de metadata (als die bestaat)
+      const metaUsername = user.user_metadata?.username;
+      
+      let { data, error } = await supabase
+        .from('player_stats')
+        .select('*')
+        .eq('id', user.id) // Gebruik user.id hier
+        .single();
+
+      if (error && error.code === 'PGRST116') {
+        const defaultUsername = email.split('@')[0] + "_" + Math.floor(Math.random() * 1000);
+        const { data: newRecord, error: createError } = await supabase
+          .from('player_stats')
+          .insert([
+            { 
+              id: user.id, 
+              username: metaUsername || username || defaultUsername, // Prioriteit: Metadata > Formulier > Random
+              cash: 1000,
+              energy: 100,
+              max_energy: 100,
+              nerve: 20,
+              max_nerve: 20,
+              strength: 10,
+              xp: 0,
+              level: 1,
+              last_updated: new Date().toISOString()
+            }
+          ])
+          .select()
+          .single();
+
+        if (createError) throw createError;
+        data = newRecord;
+        addLog(`🆕 Karakter aangemaakt! Welkom in het District, ${data.username}!`, 'success');
+      } else if (error) {
+        throw error;
+      }
+
+      if (data) {
+        calculateOfflineRecovery(data);
+      }
+    } catch (err) {
+      console.error(err);
+      addLog("❌ Database verbindingsfout.", "error");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Formula-based offline recovery (+1 Energy/min, +0.2 Nerve/min)
+  const calculateOfflineRecovery = async (currentStats) => {
+    const lastUpdated = new Date(currentStats.last_updated).getTime();
+    const now = Date.now();
+    const elapsedMinutes = Math.floor((now - lastUpdated) / 60000);
+
+    if (elapsedMinutes > 0) {
+      const energyRecovery = elapsedMinutes * 1;
+      const nerveRecovery = Math.floor(elapsedMinutes * 0.2);
+
+      const updatedEnergy = Math.min(currentStats.max_energy, currentStats.energy + energyRecovery);
+      const updatedNerve = Math.min(currentStats.max_nerve, currentStats.nerve + nerveRecovery);
+
+      const { data, error } = await supabase
+        .from('player_stats')
+        .update({
+          energy: updatedEnergy,
+          nerve: updatedNerve,
+          last_updated: new Date().toISOString()
+        })
+        .eq('id', currentStats.id)
+        .select()
+        .single();
+
+      if (!error && data) {
+        setStats(data);
+        if (energyRecovery > 0 || nerveRecovery > 0) {
+          addLog(`⏱️ Je bent ${elapsedMinutes} minuten offline geweest!`, 'info');
+          addLog(`⚡ Hersteld: +${updatedEnergy - currentStats.energy} Energie, +${updatedNerve - currentStats.nerve} Nerve.`, 'success');
+        }
+      }
+    } else {
+      setStats(currentStats);
+    }
+  };
+
+  // Sync current state to Supabase on actions
+  const updateDB = async (updatedFields) => {
+    const payload = {
+      ...updatedFields,
+      last_updated: new Date().toISOString()
+    };
+
+    setStats(prev => ({ ...prev, ...payload }));
+
+    const { error } = await supabase
+      .from('player_stats')
+      .update(payload)
+      .eq('id', user.id);
+
+    if (error) {
+      addLog("🚨 Synchronisatie met cloud database mislukt!", "error");
+    }
+  };
+
+  // ==========================================
+  // GAMEPLAY ACTIONS
+  // ==========================================
+
+  const handleTrain = () => {
+    if (jailTime > 0) return addLog("❌ Je zit opgesloten! Je kunt nu niet trainen.", "error");
+    if (stats.energy < 10) return addLog("❌ Te vermoeid! Je hebt minimaal 10 Energie nodig.", "error");
+
+    const strengthGain = Math.floor(Math.random() * 3) + 1;
+    const xpGain = 15;
+
+    let newXp = stats.xp + xpGain;
+    let newLevel = stats.level;
+    let newMaxEnergy = stats.max_energy;
+    let newMaxNerve = stats.max_nerve;
+    const nextLevelXp = stats.level * 100;
+
+    const newStats = {
+      energy: stats.energy - 10,
+      strength: stats.strength + strengthGain,
+    };
+
+    if (newXp >= nextLevelXp) {
+      newLevel += 1;
+      newXp = newXp - nextLevelXp;
+      newMaxEnergy += 10;
+      newMaxNerve += 2;
+      newStats.energy = newMaxEnergy;
+      newStats.nerve = newMaxNerve;
+      addLog(`🎉 LEVEL UP! Je bent nu Level ${newLevel}! Energie & Nerve hersteld.`, 'levelup');
+    } else {
+      addLog(`🏋️ Getraind in de lokale sportschool! Kracht +${strengthGain}, XP +${xpGain}`, 'success');
+    }
+
+    newStats.xp = newXp;
+    newStats.level = newLevel;
+    newStats.max_energy = newMaxEnergy;
+    newStats.max_nerve = newMaxNerve;
+
+    updateDB(newStats);
+  };
+
+  const handlePickpocket = () => {
+    if (jailTime > 0) return addLog("❌ Gevangenen kunnen geen misdaden plegen!", "error");
+    if (stats.nerve < 4) return addLog("❌ Je hebt niet genoeg lef (Nerve). Wacht tot het herstelt.", "error");
+
+    const success = Math.random() > 0.25; // 75% kans
+    const newStats = { nerve: stats.nerve - 4 };
+
+    if (success) {
+      const cashLoot = Math.floor(Math.random() * 80) + 20;
+      newStats.cash = stats.cash + cashLoot;
+      newStats.xp = stats.xp + 10;
+      addLog(`👛 Succes! Je hebt een toerist gerold voor $${cashLoot}. +10 XP.`, 'success');
+    } else {
+      addLog(`👮 Mislukt! De toerist had je door en je moest met lege handen vluchten!`, 'error');
+    }
+
+    updateDB(newStats);
+  };
+
+  const handleHeist = () => {
+    if (jailTime > 0) return addLog("❌ Je zit momenteel in een cel!", "error");
+    if (stats.nerve < 12) return addLog("❌ Je hebt minimaal 12 Nerve nodig voor een bankoverval.", "error");
+
+    const baseSuccess = 0.40;
+    const strengthBonus = Math.min(0.20, stats.strength / 200);
+    const success = Math.random() < (baseSuccess + strengthBonus);
+
+    const newStats = { nerve: stats.nerve - 12 };
+
+    if (success) {
+      const heistLoot = Math.floor(Math.random() * 1500) + 500;
+      newStats.cash = stats.cash + heistLoot;
+      newStats.xp = stats.xp + 40;
+      addLog(`🏦 OVERVAL GESLAAGD! De lokale kluis leeggehaald voor $${heistLoot}! +40 XP.`, 'success');
+    } else {
+      if (Math.random() > 0.5) {
+        setJailTime(60);
+        addLog(`🚨 COPS! De SWAT was te snel ter plaatse. 60 seconden gevangenisstraf.`, 'jail');
+      } else {
+        addLog(`🏃 Alarm ging af! Je bent ternauwernood ontsnapt zonder buit.`, 'error');
+      }
+    }
+
+    updateDB(newStats);
+  };
+
+  // ==========================================
+  // AUTH OPERATIONS
+  // ==========================================
+
+  const handleAuth = async (e) => {
+    e.preventDefault();
+    if (!email || !password) return;
+    setAuthLoading(true);
+
+    try {
+      if (isRegistering) {
+        const { error } = await supabase.auth.signUp({ 
+          email, 
+          password,
+          options: {
+            data: { username }
+          }
+        });
+        if (error) throw error;
+        addLog("✉️ Verificatie-mail verzonden! Check je inbox.", "info");
+      } else {
+        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        if (error) throw error;
+      }
+    } catch (err) {
+      addLog(`❌ Fout: ${err.message}`, "error");
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleLogout = () => {
+    supabase.auth.signOut();
+  };
+
+  // Loader screen
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex flex-col justify-center items-center">
+        <Loader2 className="h-10 w-10 text-rose-500 animate-spin mb-4" />
+        <p className="text-slate-400 font-mono text-xs">District Underworld opstarten...</p>
+      </div>
+    );
+  }
+
+  // Auth Screen (Login / Register)
+  if (!user) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4">
+        <div className="w-full max-w-sm bg-slate-900 border border-slate-850 rounded-2xl p-6 shadow-2xl relative overflow-hidden">
+          <div className="absolute top-0 right-0 w-32 h-32 bg-rose-500/5 rounded-full blur-3xl"></div>
+          
+          <div className="flex flex-col items-center mb-8">
+            <div className="p-3 bg-rose-500/10 rounded-xl border border-rose-500/20 mb-3">
+              <Skull className="h-8 w-8 text-rose-500 animate-pulse" />
+            </div>
+            <h1 className="text-2xl font-bold tracking-tight text-white">District Underworld</h1>
+            <p className="text-xs text-slate-400 mt-1">Bouw je eigen misdaadimperium op</p>
+          </div>
+
+          <form onSubmit={handleAuth} className="space-y-4">
+            {isRegistering && (
+              <div>
+                <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Gebruikersnaam</label>
+                <div className="relative">
+                  <User className="absolute left-3 top-2.5 h-4 w-4 text-slate-500" />
+                  <input 
+                    type="text" 
+                    placeholder="bijv. Capone_23" 
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-850 rounded-xl py-2 pl-10 pr-4 text-sm text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-rose-500 transition"
+                    required
+                  />
+                </div>
+              </div>
+            )}
+
+            <div>
+              <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">E-mailadres</label>
+              <div className="relative">
+                <User className="absolute left-3 top-2.5 h-4 w-4 text-slate-500" />
+                <input 
+                  type="email" 
+                  placeholder="jouw-email@syndicate.com" 
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-850 rounded-xl py-2 pl-10 pr-4 text-sm text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-rose-500 transition"
+                  required
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Wachtwoord</label>
+              <div className="relative">
+                <Lock className="absolute left-3 top-2.5 h-4 w-4 text-slate-500" />
+                <input 
+                  type="password" 
+                  placeholder="••••••••••••" 
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-850 rounded-xl py-2 pl-10 pr-4 text-sm text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-rose-500 transition"
+                  required
+                />
+              </div>
+            </div>
+
+            <button 
+              type="submit" 
+              disabled={authLoading}
+              className="w-full bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white py-2.5 rounded-xl font-semibold text-sm transition shadow-lg shadow-rose-950/20 flex justify-center items-center gap-2"
+            >
+              {authLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : isRegistering ? "Karakter Aanmaken" : "Betreed Underworld"}
+            </button>
+          </form>
+
+          <div className="mt-6 text-center text-xs text-slate-500">
+            {isRegistering ? (
+              <p>Heb je al een syndicaat? <button onClick={() => setIsRegistering(false)} className="text-rose-400 font-medium hover:underline">Log In</button></p>
+            ) : (
+              <p>Eerste dag op straat? <button onClick={() => setIsRegistering(true)} className="text-rose-400 font-medium hover:underline">Registreer hier</button></p>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Active Game Dashboard
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
+      {/* HEADER */}
+      <header className="bg-slate-900 border-b border-slate-800 py-4 px-6 flex flex-wrap justify-between items-center gap-4">
+        <div className="flex items-center gap-3">
+          <Skull className="h-6 w-6 text-rose-500" />
+          <div>
+            <h1 className="text-base font-bold text-white leading-tight">District Underworld</h1>
+            <p className="text-[10px] text-slate-400 font-mono">Geautoriseerde maffia-omgeving</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-4">
+          <div className="text-right text-xs">
+            <p className="text-slate-400">Ingelogd als:</p>
+            <p className="text-rose-400 font-bold">{stats?.username || email}</p>
+          </div>
+          <button 
+            onClick={handleLogout}
+            className="p-2 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition"
+            title="Log uit"
+          >
+            <LogOut className="h-4 w-4" />
+          </button>
+        </div>
+      </header>
+
+      {/* GAME SECTION */}
+      <main className="flex-grow grid grid-cols-1 lg:grid-cols-12 gap-6 p-6 overflow-y-auto">
+        {/* STATS & ACTIONS (Left 5 Cols) */}
+        <section className="lg:col-span-5 flex flex-col gap-6">
+          
+          {/* STATS CARD */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl relative overflow-hidden">
+            <div className="absolute top-0 right-0 w-32 h-32 bg-rose-500/5 rounded-full blur-2xl"></div>
+            
+            <div className="flex justify-between items-start mb-6">
+              <div>
+                <h2 className="text-xl font-bold text-white tracking-tight">{stats?.username || "Petty Criminal"}</h2>
+                <span className="text-xs bg-slate-800 text-slate-300 px-2.5 py-1 rounded font-mono block mt-1 w-fit">
+                  Level {stats?.level || 1} • Kruimeldief
+                </span>
+              </div>
+              <div className="text-right">
+                <span className="text-xs text-slate-500 uppercase tracking-wider block">Contant Geld</span>
+                <span className="text-2xl font-extrabold text-emerald-400 flex items-center gap-1 justify-end font-mono">
+                  <Coins className="h-5 w-5" /> ${stats?.cash?.toLocaleString() || 0}
+                </span>
+              </div>
+            </div>
+
+            {/* PROGRESS BARS */}
+            <div className="space-y-4">
+              {/* Energy */}
+              <div>
+                <div className="flex justify-between text-xs mb-1.5">
+                  <span className="text-slate-400 font-semibold flex items-center gap-1.5">
+                    <Zap className="h-3.5 w-3.5 text-amber-500" /> Energie
+                  </span>
+                  <span className="text-slate-200 font-mono">{stats?.energy || 0}/{stats?.max_energy || 100}</span>
+                </div>
+                <div className="w-full bg-slate-950 rounded-full h-2.5 overflow-hidden border border-slate-850">
+                  <div 
+                    className="bg-amber-500 h-full transition-all duration-300 rounded-full" 
+                    style={{ width: `${((stats?.energy || 0) / (stats?.max_energy || 100)) * 100}%` }}
+                  ></div>
+                </div>
+              </div>
+
+              {/* Nerve */}
+              <div>
+                <div className="flex justify-between text-xs mb-1.5">
+                  <span className="text-slate-400 font-semibold flex items-center gap-1.5">
+                    <Skull className="h-3.5 w-3.5 text-purple-500" /> Nerve (Lef)
+                  </span>
+                  <span className="text-slate-200 font-mono">{stats?.nerve || 0}/{stats?.max_nerve || 20}</span>
+                </div>
+                <div className="w-full bg-slate-950 rounded-full h-2.5 overflow-hidden border border-slate-850">
+                  <div 
+                    className="bg-purple-500 h-full transition-all duration-300 rounded-full" 
+                    style={{ width: `${((stats?.nerve || 0) / (stats?.max_nerve || 20)) * 100}%` }}
+                  ></div>
+                </div>
+              </div>
+
+              {/* Stats & XP Grid */}
+              <div className="grid grid-cols-2 gap-4 pt-4 border-t border-slate-800/60 mt-2">
+                <div>
+                  <span className="text-[10px] uppercase tracking-wider text-slate-500 block">Fysieke Kracht</span>
+                  <span className="text-base font-extrabold text-white flex items-center gap-1.5 mt-0.5">
+                    💪 {stats?.strength || 10}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[10px] uppercase tracking-wider text-slate-500 block">Ervaring (XP)</span>
+                  <span className="text-xs font-bold text-slate-300 font-mono block mt-1">
+                    {stats?.xp || 0} / {(stats?.level || 1) * 100} XP
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* JAIL BANNER */}
+          {jailTime > 0 && (
+            <div className="bg-red-950/40 border border-red-800/40 rounded-2xl p-4 flex items-center gap-4">
+              <Clock className="h-8 w-8 text-red-500 animate-spin" />
+              <div>
+                <h4 className="text-red-400 font-bold">Je zit in de gevangenis!</h4>
+                <p className="text-xs text-red-300/80">Straftijd over: {jailTime} seconden. Alle acties zijn gevangenis-gebonden.</p>
+              </div>
+            </div>
+          )}
+
+          {/* GAME OPERATIONS */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl flex-grow flex flex-col justify-between">
+            <div>
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-4 flex items-center gap-1.5">
+                <Swords className="h-4 w-4" /> Misdaad Operaties
+              </h3>
+              
+              <div className="space-y-3">
+                {/* Gym */}
+                <button 
+                  onClick={handleTrain}
+                  className="w-full bg-slate-850 hover:bg-slate-800 active:bg-slate-900 text-white p-3.5 rounded-xl border border-slate-800 flex justify-between items-center transition"
+                >
+                  <div className="flex items-center gap-3">
+                    <span className="text-2xl">🏋️‍♂️</span>
+                    <div className="text-left">
+                      <p className="text-sm font-semibold">Sportschool</p>
+                      <p className="text-xs text-slate-400">Verhoog permanent je kracht</p>
+                    </div>
+                  </div>
+                  <span className="bg-amber-550/10 text-amber-400 text-[10px] font-bold px-2 py-1 rounded font-mono border border-amber-500/20">-10 Energie</span>
+                </button>
+
+                {/* Pickpocket */}
+                <button 
+                  onClick={handlePickpocket}
+                  className="w-full bg-slate-850 hover:bg-slate-800 active:bg-slate-900 text-white p-3.5 rounded-xl border border-slate-800 flex justify-between items-center transition"
+                >
+                  <div className="flex items-center gap-3">
+                    <span className="text-2xl">👛</span>
+                    <div className="text-left">
+                      <p className="text-sm font-semibold">Toerist Rollen</p>
+                      <p className="text-xs text-slate-400">75% kans op succes (Makkelijk)</p>
+                    </div>
+                  </div>
+                  <span className="bg-purple-550/10 text-purple-400 text-[10px] font-bold px-2 py-1 rounded font-mono border border-purple-500/20">-4 Nerve</span>
+                </button>
+
+                {/* Heist */}
+                <button 
+                  onClick={handleHeist}
+                  className="w-full bg-slate-850 hover:bg-rose-950/20 hover:border-rose-900/40 text-white p-3.5 rounded-xl border border-slate-800 flex justify-between items-center transition"
+                >
+                  <div className="flex items-center gap-3">
+                    <span className="text-2xl">🏦</span>
+                    <div className="text-left">
+                      <p className="text-sm font-semibold text-rose-300">Grote Kluis Overvallen</p>
+                      <p className="text-xs text-slate-400">Hoog risico op arrestatie, gigantische buit</p>
+                    </div>
+                  </div>
+                  <span className="bg-purple-550/10 text-purple-400 text-[10px] font-bold px-2 py-1 rounded font-mono border border-purple-500/20">-12 Nerve</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="bg-slate-950 p-4 rounded-xl border border-slate-850/80 mt-6 text-xs text-slate-400 flex items-center gap-3">
+              <Award className="h-5 w-5 text-rose-500 shrink-0" />
+              <p>Energie (+1/min) & Nerve (+0.2/min) herstellen volautomatisch, zelfs als je offline bent!</p>
+            </div>
+          </div>
+        </section>
+
+        {/* GAME LOGS (Right 7 Cols) */}
+        <section className="lg:col-span-7 flex flex-col gap-6">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl flex-grow flex flex-col">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-4">
+              📋 Activiteitenlogboek
+            </h3>
+            
+            <div className="flex-grow bg-slate-950 rounded-xl p-4 font-mono text-xs border border-slate-850 overflow-y-auto max-h-[400px] lg:max-h-none space-y-2.5">
+              {logs.length === 0 ? (
+                <p className="text-slate-600 italic">Nog geen activiteiten gelogd. Start een operatie om het logboek op te bouwen.</p>
+              ) : (
+                logs.map((log, i) => (
+                  <p 
+                    key={i} 
+                    className={`leading-relaxed ${
+                      log.type === 'success' ? 'text-emerald-400' :
+                      log.type === 'error' ? 'text-red-400' :
+                      log.type === 'jail' ? 'text-rose-500 font-bold' :
+                      log.type === 'levelup' ? 'text-amber-400 font-bold' : 'text-slate-300'
+                    }`}
+                  >
+                    <span className="text-slate-600 mr-2">[{log.time}]</span>
+                    {log.text}
+                  </p>
+                ))
+              )}
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  );
+}
