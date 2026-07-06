@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import './Game.css';
 // We importen Supabase nu direct via een universele ESM CDN om bundler-fouten in de preview te voorkomen
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
@@ -1446,9 +1447,9 @@ export default function App() {
   };
 
   const renderLiveChatWidget = () => {
-    if (!user) return null;
+    if (!user || typeof document === 'undefined') return null;
 
-    return (
+    return createPortal(
       <div
         style={{
           position: 'fixed',
@@ -1632,7 +1633,8 @@ export default function App() {
             )}
           </button>
         )}
-      </div>
+      </div>,
+      document.body
     );
   };
 
