@@ -318,6 +318,7 @@ button:focus-visible {
 .font-extrabold { font-weight: 800; }
 .italic { font-style: italic; }
 .uppercase { text-transform: uppercase; }
+.break-words { overflow-wrap: anywhere; word-break: break-word; }
 .leading-tight { line-height: 1.2; }
 .leading-relaxed { line-height: 1.5; }
 .tracking-tight { letter-spacing: 0.01em; }
