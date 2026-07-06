@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import './Game.css';
 // We importen Supabase nu direct via een universele ESM CDN om bundler-fouten in de preview te voorkomen
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
@@ -28,6 +28,10 @@ const PRISON_RESCUE_NERVE_COST = 5;
 const ADMIN_JAIL_SECONDS = 60;
 const ENERGY_RECOVERY_INTERVAL_SECONDS = 60;
 const NERVE_RECOVERY_INTERVAL_SECONDS = 300;
+const CASH_INTEGER_MAX = 2147483647;
+const CHAT_MAX_VISIBLE_LINES = 20;
+const CHAT_LINE_HEIGHT = 1.45;
+const CHAT_FONT_SIZE_PX = 12;
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const NAV_TABS = ['overzicht', 'mijn items', 'woning', 'stad', 'misdaad', 'sporten', 'reizen'];
@@ -58,6 +62,8 @@ export default function App() {
   const [adminMembers, setAdminMembers] = useState([]);
   const [adminLoading, setAdminLoading] = useState(false);
   const [adminActionLoadingId, setAdminActionLoadingId] = useState(null);
+  const [adminCashInputs, setAdminCashInputs] = useState({});
+  const [adminSearchTerm, setAdminSearchTerm] = useState('');
   const [rankMenuOpenId, setRankMenuOpenId] = useState(null);
   const [cityMenuOpen, setCityMenuOpen] = useState(false);
   const [prisonMembers, setPrisonMembers] = useState([]);
@@ -65,6 +71,24 @@ export default function App() {
   const [prisonActionLoadingId, setPrisonActionLoadingId] = useState(null);
   const [prisonActionWarning, setPrisonActionWarning] = useState('');
   const [recoveryTimers, setRecoveryTimers] = useState({ energy: null, nerve: null });
+  const [actionNotice, setActionNotice] = useState(null);
+  const [adminNotice, setAdminNotice] = useState(null);
+  const [chatMessages, setChatMessages] = useState([]);
+  const [chatInput, setChatInput] = useState('');
+  const [chatLoading, setChatLoading] = useState(false);
+  const [chatSending, setChatSending] = useState(false);
+  const [chatDeletingId, setChatDeletingId] = useState(null);
+  const [chatUserRoles, setChatUserRoles] = useState({});
+  const chatScrollRef = useRef(null);
+  const shouldAutoScrollChatRef = useRef(true);
+  const didInitialChatScrollRef = useRef(false);
+  const chatUserRolesRef = useRef({});
+
+  const scrollChatToBottom = () => {
+    const container = chatScrollRef.current;
+    if (!container) return;
+    container.scrollTop = container.scrollHeight;
+  };
 
   const normalizeRole = (value) => {
     const roleValue = (value || '').toString().trim().toLowerCase();
@@ -188,7 +212,7 @@ export default function App() {
 
       const { data, error } = await supabase
         .from('player_stats')
-        .select('id, username, level, gender, cash, strength, xp, last_updated, jail_until')
+        .select('id, username, level, role, gender, cash, strength, xp, last_updated, jail_until')
         .gte('last_updated', fiveMinutesAgo)
         .order('last_updated', { ascending: false });
 
@@ -234,6 +258,106 @@ export default function App() {
     return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
   };
 
+  const formatChatTime = (value) => {
+    if (!value) return '';
+    const date = new Date(value);
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  };
+
+  const getChatDayKey = (value) => {
+    if (!value) return '';
+    const date = new Date(value);
+    return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+  };
+
+  const formatChatDayLabel = (value) => {
+    if (!value) return '';
+    const date = new Date(value);
+    const today = new Date();
+    const isToday =
+      date.getFullYear() === today.getFullYear() &&
+      date.getMonth() === today.getMonth() &&
+      date.getDate() === today.getDate();
+    if (isToday) return 'Today';
+    return date.toLocaleDateString([], { day: '2-digit', month: '2-digit', year: '2-digit' });
+  };
+
+  const isOwnChatMessage = (messageUsername) => {
+    const own = (stats?.username || '').trim().toLowerCase();
+    const incoming = (messageUsername || '').trim().toLowerCase();
+    return Boolean(own) && own === incoming;
+  };
+
+  const getChatUsernameKey = (value) => (value || '').trim().toLowerCase();
+
+  const mergeChatUserRoles = (entries) => {
+    if (!entries || entries.length === 0) return;
+    setChatUserRoles((prev) => {
+      const next = { ...prev };
+      entries.forEach(({ username, role }) => {
+        const key = getChatUsernameKey(username);
+        if (!key) return;
+        next[key] = normalizeRole(role);
+      });
+      return next;
+    });
+  };
+
+  useEffect(() => {
+    chatUserRolesRef.current = chatUserRoles;
+  }, [chatUserRoles]);
+
+  const fetchRolesForChatUsernames = async (usernames) => {
+    const normalized = Array.from(new Set((usernames || [])
+      .map((name) => (name || '').trim())
+      .filter(Boolean)
+      .filter((name) => {
+        const key = name.toLowerCase();
+        return key !== 'systeem' && key !== 'system';
+      })));
+
+    if (normalized.length === 0) return;
+
+    try {
+      const lookups = await Promise.all(
+        normalized.map(async (usernameValue) => {
+          const { data, error } = await supabase
+            .from('player_stats')
+            .select('username, role')
+            .ilike('username', usernameValue)
+            .limit(1)
+            .maybeSingle();
+
+          if (error || !data) return null;
+          return data;
+        })
+      );
+
+      mergeChatUserRoles(lookups.filter(Boolean));
+    } catch (_error) {
+      // Chat blijft werken; alleen staffkleur kan ontbreken als lookup faalt.
+    }
+  };
+
+  const ensureChatUserRole = async (username) => {
+    const key = getChatUsernameKey(username);
+    if (!key || key === 'systeem' || key === 'system' || chatUserRolesRef.current[key]) return;
+
+    try {
+      const { data, error } = await supabase
+        .from('player_stats')
+        .select('username, role')
+        .ilike('username', username)
+        .limit(1)
+        .maybeSingle();
+
+      if (error || !data) return;
+      mergeChatUserRoles([data]);
+    } catch (_error) {
+      // Stil: alleen kleuraccent kan ontbreken.
+    }
+  };
+
   const calculatePrisonBribeCost = (remainingJailSeconds) => {
     const safeSeconds = Math.max(0, Number(remainingJailSeconds) || 0);
     return PRISON_BRIBE_BASE_COST + safeSeconds * PRISON_BRIBE_COST_PER_SECOND;
@@ -249,6 +373,163 @@ export default function App() {
     const penaltySteps = Math.floor(Math.max(0, remainingJailSeconds) / 30);
     const chance = 0.6 - penaltySteps * 0.05;
     return Math.max(0.1, Math.min(0.6, chance));
+  };
+
+  const refreshChatMessages = async () => {
+    setChatLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from('messages')
+        .select('id, username, content, created_at')
+        .order('created_at', { ascending: false })
+        .limit(80);
+
+      if (error) throw error;
+
+      const sorted = [...(data || [])].reverse();
+      void fetchRolesForChatUsernames(sorted.map((message) => message.username));
+      shouldAutoScrollChatRef.current = true;
+      setChatMessages(sorted);
+    } catch (error) {
+      addLog(`❌ Chat laden mislukt: ${error.message}`, 'error');
+    } finally {
+      setChatLoading(false);
+    }
+  };
+
+  const handleSendChatMessage = async (event) => {
+    event.preventDefault();
+    if (!user || !stats || chatSending) return;
+
+    const content = chatInput.trim();
+    if (!content) return;
+
+    const messageUsername = stats?.username || user?.email?.split('@')[0] || 'Onbekend';
+
+    setChatSending(true);
+    try {
+      const { error } = await supabase
+        .from('messages')
+        .insert([{ username: messageUsername, content }]);
+
+      if (error) throw error;
+      setChatInput('');
+    } catch (error) {
+      addLog(`❌ Bericht verzenden mislukt: ${error.message}`, 'error');
+    } finally {
+      setChatSending(false);
+    }
+  };
+
+  const handleDeleteChatMessage = async (messageId) => {
+    if (userRole !== 'admin' || !messageId || chatDeletingId) return;
+
+    setChatDeletingId(messageId);
+    try {
+      const { error } = await supabase
+        .from('messages')
+        .delete()
+        .eq('id', messageId);
+
+      if (error) throw error;
+
+      const { data: remainingMessage, error: verifyError } = await supabase
+        .from('messages')
+        .select('id')
+        .eq('id', messageId)
+        .maybeSingle();
+
+      if (verifyError) throw verifyError;
+      if (remainingMessage) {
+        addLog('❌ Bericht niet verwijderd. Controleer admin rechten/RLS voor chat DELETE.', 'error');
+        return;
+      }
+
+      setChatMessages((prev) => prev.filter((message) => message.id !== messageId));
+    } catch (error) {
+      addLog(`❌ Bericht verwijderen mislukt: ${error.message}`, 'error');
+    } finally {
+      setChatDeletingId(null);
+    }
+  };
+
+  const handleChatInputKeyDown = (event) => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    if (!chatInput.trim() || chatSending) return;
+    void handleSendChatMessage(event);
+  };
+
+  const handleOpenChatProfile = async (messageUsername) => {
+    const targetUsername = (messageUsername || '').trim();
+    if (!targetUsername) return;
+
+    const normalizedTarget = targetUsername.toLowerCase();
+    if (normalizedTarget === 'systeem' || normalizedTarget === 'system') return;
+
+    const ownUsername = (stats?.username || '').trim().toLowerCase();
+    if (ownUsername && ownUsername === normalizedTarget) {
+      setCurrentView('profile');
+      return;
+    }
+
+    const onlineMatch = onlineMembers.find(
+      (member) => (member?.username || '').trim().toLowerCase() === normalizedTarget
+    );
+
+    if (onlineMatch) {
+      setSelectedMemberProfile(onlineMatch);
+      setCurrentView('member-profile');
+      return;
+    }
+
+    try {
+      const { data, error } = await supabase
+        .from('player_stats')
+        .select('*')
+        .ilike('username', targetUsername)
+        .limit(1)
+        .maybeSingle();
+
+      if (error) throw error;
+
+      if (!data) {
+        addLog(`⚠️ Profiel van ${formatDisplayUsername(targetUsername)} niet gevonden.`, 'error');
+        return;
+      }
+
+      setSelectedMemberProfile(data);
+      setCurrentView('member-profile');
+    } catch (error) {
+      addLog(`❌ Profiel laden mislukt: ${error.message}`, 'error');
+    }
+  };
+
+  const handleChatScroll = () => {
+    const container = chatScrollRef.current;
+    if (!container) return;
+    const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+    shouldAutoScrollChatRef.current = distanceFromBottom <= 80;
+  };
+
+  const showActionNotice = (text, type = 'info') => {
+    setActionNotice({ text, type });
+  };
+
+  const showAdminNotice = (text, type = 'info') => {
+    setAdminNotice({ text, type });
+  };
+
+  const formatAmountWithDots = (value) => {
+    const digits = String(value || '').replace(/\D/g, '');
+    if (!digits) return '';
+    return digits.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+  };
+
+  const parseAmountInput = (value) => {
+    const digits = String(value || '').replace(/\D/g, '');
+    if (!digits) return 0;
+    return Number(digits);
   };
 
   const isMissingPrisonRpc = (error) => {
@@ -305,7 +586,23 @@ export default function App() {
       if (data) {
         const dbRole = normalizeRole(data.role);
         const fallbackRole = resolveUserRole(user);
-        setUserRole(dbRole !== 'lid' ? dbRole : fallbackRole);
+        const effectiveRole = dbRole !== 'lid' ? dbRole : fallbackRole;
+
+        if (dbRole !== effectiveRole) {
+          const { data: roleUpdatedData, error: roleUpdateError } = await supabase
+            .from('player_stats')
+            .update({ role: effectiveRole })
+            .eq('id', user.id)
+            .select('*')
+            .maybeSingle();
+
+          if (!roleUpdateError && roleUpdatedData) {
+            data = roleUpdatedData;
+          }
+        }
+
+        setUserRole(effectiveRole);
+        setStats(data);
         calculateOfflineRecovery(data);
       }
     } catch (err) {
@@ -376,8 +673,16 @@ export default function App() {
   // ==========================================
 
   const handleTrain = () => {
-    if (jailTime > 0) return addLog("❌ Je zit opgesloten! Je kunt nu niet trainen.", "error");
-    if (stats.energy < 10) return addLog("❌ Te vermoeid! Je hebt minimaal 10 Energie nodig.", "error");
+    if (jailTime > 0) {
+      const message = "❌ Je zit opgesloten! Je kunt nu niet trainen.";
+      showActionNotice(message, 'error');
+      return addLog(message, 'error');
+    }
+    if (stats.energy < 10) {
+      const message = "❌ Te vermoeid! Je hebt minimaal 10 Energie nodig.";
+      showActionNotice(message, 'error');
+      return addLog(message, 'error');
+    }
 
     const strengthGain = Math.floor(Math.random() * 3) + 1;
     const xpGain = 15;
@@ -400,9 +705,13 @@ export default function App() {
       newMaxNerve += 2;
       newStats.energy = newMaxEnergy;
       newStats.nerve = newMaxNerve;
-      addLog(`🎉 LEVEL UP! Je bent nu Level ${newLevel}! Energie & Nerve hersteld.`, 'levelup');
+      const message = `🎉 LEVEL UP! Je bent nu Level ${newLevel}! Energie & Nerve hersteld.`;
+      showActionNotice(message, 'success');
+      addLog(message, 'levelup');
     } else {
-      addLog(`🏋️ Getraind in de lokale sportschool! Kracht +${strengthGain}, XP +${xpGain}`, 'success');
+      const message = `🏋️ Getraind in de lokale sportschool! Kracht +${strengthGain}, XP +${xpGain}`;
+      showActionNotice(message, 'success');
+      addLog(message, 'success');
     }
 
     newStats.xp = newXp;
@@ -414,8 +723,16 @@ export default function App() {
   };
 
   const handlePickpocket = () => {
-    if (jailTime > 0) return addLog("❌ Gevangenen kunnen geen misdaden plegen!", "error");
-    if (stats.nerve < 4) return addLog("❌ Je hebt niet genoeg lef (Nerve). Wacht tot het herstelt.", "error");
+    if (jailTime > 0) {
+      const message = "❌ Gevangenen kunnen geen misdaden plegen!";
+      showActionNotice(message, 'error');
+      return addLog(message, 'error');
+    }
+    if (stats.nerve < 4) {
+      const message = "❌ Je hebt niet genoeg lef (Nerve). Wacht tot het herstelt.";
+      showActionNotice(message, 'error');
+      return addLog(message, 'error');
+    }
 
     const success = Math.random() > 0.25; // 75% kans
     const newStats = { nerve: stats.nerve - 4 };
@@ -424,17 +741,29 @@ export default function App() {
       const cashLoot = Math.floor(Math.random() * 80) + 20;
       newStats.cash = stats.cash + cashLoot;
       newStats.xp = stats.xp + 10;
-      addLog(`👛 Succes! Je hebt een toerist gerold voor $${cashLoot}. +10 XP.`, 'success');
+      const message = `👛 Succes! Je hebt een toerist gerold voor $${cashLoot}. +10 XP.`;
+      showActionNotice(message, 'success');
+      addLog(message, 'success');
     } else {
-      addLog(`👮 Mislukt! De toerist had je door en je moest met lege handen vluchten!`, 'error');
+      const message = '👮 Mislukt! De toerist had je door en je moest met lege handen vluchten!';
+      showActionNotice(message, 'error');
+      addLog(message, 'error');
     }
 
     updateDB(newStats);
   };
 
   const handleHeist = () => {
-    if (jailTime > 0) return addLog("❌ Je zit momenteel in een cel!", "error");
-    if (stats.nerve < 12) return addLog("❌ Je hebt minimaal 12 Nerve nodig voor een bankoverval.", "error");
+    if (jailTime > 0) {
+      const message = '❌ Je zit momenteel in een cel!';
+      showActionNotice(message, 'error');
+      return addLog(message, 'error');
+    }
+    if (stats.nerve < 12) {
+      const message = '❌ Je hebt minimaal 12 Nerve nodig voor een bankoverval.';
+      showActionNotice(message, 'error');
+      return addLog(message, 'error');
+    }
 
     const baseSuccess = 0.40;
     const strengthBonus = Math.min(0.20, stats.strength / 200);
@@ -446,14 +775,20 @@ export default function App() {
       const heistLoot = Math.floor(Math.random() * 1500) + 500;
       newStats.cash = stats.cash + heistLoot;
       newStats.xp = stats.xp + 40;
-      addLog(`🏦 OVERVAL GESLAAGD! De lokale kluis leeggehaald voor $${heistLoot}! +40 XP.`, 'success');
+      const message = `🏦 OVERVAL GESLAAGD! De lokale kluis leeggehaald voor $${heistLoot}! +40 XP.`;
+      showActionNotice(message, 'success');
+      addLog(message, 'success');
     } else {
       if (Math.random() > 0.5) {
         const jailUntil = new Date(Date.now() + 60 * 1000).toISOString();
         newStats.jail_until = jailUntil;
-        addLog(`🚨 COPS! De SWAT was te snel ter plaatse. 60 seconden gevangenisstraf.`, 'jail');
+        const message = '🚨 COPS! De SWAT was te snel ter plaatse. 60 seconden gevangenisstraf.';
+        showActionNotice(message, 'error');
+        addLog(message, 'jail');
       } else {
-        addLog(`🏃 Alarm ging af! Je bent ternauwernood ontsnapt zonder buit.`, 'error');
+        const message = '🏃 Alarm ging af! Je bent ternauwernood ontsnapt zonder buit.';
+        showActionNotice(message, 'error');
+        addLog(message, 'error');
       }
     }
 
@@ -818,31 +1153,123 @@ export default function App() {
     supabase.auth.signOut();
   };
 
-  const performAdminAction = async (member, action) => {
+  const performAdminAction = async (member, action, payload = {}) => {
     if (!STAFF_ROLES.includes(userRole)) return;
 
     try {
       setAdminActionLoadingId(member.id);
 
-      if (action === 'cash') {
+      if (action === 'cash-adjust') {
         if (userRole !== 'admin' && userRole !== 'moderator') {
           throw new Error('Alleen admins en moderators mogen cash geven.');
         }
 
+        const amount = parseAmountInput(payload.amount);
+        if (amount <= 0) {
+          throw new Error('Voer een geldig bedrag groter dan 0 in.');
+        }
+        if (amount > CASH_INTEGER_MAX) {
+          throw new Error(`Bedrag te groot. Max per actie: $${CASH_INTEGER_MAX.toLocaleString()}.`);
+        }
+
+        const isAdd = payload.mode !== 'remove';
+        const delta = isAdd ? amount : -amount;
+
         if (member.id === user?.id) {
-          const nextCash = (stats?.cash || 0) + 1000;
+          const currentCash = stats?.cash || 0;
+          const nextCash = currentCash + delta;
+          if (nextCash < 0) {
+            throw new Error('Deze speler heeft niet genoeg cash om dit bedrag af te nemen.');
+          }
+          if (nextCash > CASH_INTEGER_MAX) {
+            throw new Error(`Max cash bereikt. Huidige database limiet is $${CASH_INTEGER_MAX.toLocaleString()}.`);
+          }
+
           await updateDB({ cash: nextCash });
-          addLog(`🛠️ Admin: ${formatDisplayUsername(member.username)} kreeg +$1.000.`, 'success');
+          const message = isAdd
+            ? `🛠️ Admin: ${formatDisplayUsername(member.username)} kreeg +$${amount.toLocaleString()}.`
+            : `🛠️ Admin: $${amount.toLocaleString()} afgenomen van ${formatDisplayUsername(member.username)}.`;
+          showAdminNotice(message, 'success');
+          addLog(message, 'success');
           await refreshAdminMembers();
           return;
         }
 
+        const rpcAction = `cash:${delta}`;
         const { error } = await supabase.rpc('admin_apply_action', {
           p_target_id: member.id,
-          p_action: 'cash'
+          p_action: rpcAction
         });
-        if (error) throw error;
-        addLog(`🛠️ Admin: ${formatDisplayUsername(member.username)} kreeg +$1.000.`, 'success');
+
+        if (error) {
+          const rpcMessage = (error.message || '').toLowerCase();
+          const outOfRangeError =
+            rpcMessage.includes('out of range') ||
+            rpcMessage.includes('numeric field overflow') ||
+            rpcMessage.includes('integer');
+
+          if (outOfRangeError) {
+            throw new Error(`Bedrag te groot voor cash kolom. Huidige limiet: $${CASH_INTEGER_MAX.toLocaleString()}.`);
+          }
+
+          const cashActionMissing =
+            rpcMessage.includes('onbekende admin actie') ||
+            (rpcMessage.includes('unknown') && rpcMessage.includes('cash')) ||
+            (rpcMessage.includes('cash') && !rpcMessage.includes('function'));
+
+          if (!cashActionMissing) {
+            throw error;
+          }
+
+          const { data: targetData, error: targetReadError } = await supabase
+            .from('player_stats')
+            .select('cash')
+            .eq('id', member.id)
+            .maybeSingle();
+
+          if (targetReadError || !targetData) {
+            throw new Error('Cash aanpassen mislukt. Doelspeler niet gevonden of geen leesrechten.');
+          }
+
+          const nextCash = (targetData.cash || 0) + delta;
+          if (nextCash < 0) {
+            throw new Error('Deze speler heeft niet genoeg cash om dit bedrag af te nemen.');
+          }
+          if (nextCash > CASH_INTEGER_MAX) {
+            throw new Error(`Bedrag te groot voor cash kolom. Huidige limiet: $${CASH_INTEGER_MAX.toLocaleString()}.`);
+          }
+
+          const { data: updatedRow, error: fallbackError } = await supabase
+            .from('player_stats')
+            .update({ cash: nextCash })
+            .eq('id', member.id)
+            .select('id')
+            .maybeSingle();
+
+          if (fallbackError) {
+            const fallbackMessage = (fallbackError.message || '').toLowerCase();
+            const fallbackOutOfRange =
+              fallbackMessage.includes('out of range') ||
+              fallbackMessage.includes('numeric field overflow') ||
+              fallbackMessage.includes('integer');
+
+            if (fallbackOutOfRange) {
+              throw new Error(`Bedrag te groot voor cash kolom. Huidige limiet: $${CASH_INTEGER_MAX.toLocaleString()}.`);
+            }
+
+            throw new Error('Cash aanpassen geblokkeerd door RLS policy. Voeg cash support toe in admin_apply_action.');
+          }
+
+          if (!updatedRow) {
+            throw new Error('Cash aanpassen geblokkeerd door RLS policy. Voeg cash support toe in admin_apply_action.');
+          }
+        }
+
+        const message = isAdd
+          ? `🛠️ Admin: ${formatDisplayUsername(member.username)} kreeg +$${amount.toLocaleString()}.`
+          : `🛠️ Admin: $${amount.toLocaleString()} afgenomen van ${formatDisplayUsername(member.username)}.`;
+        showAdminNotice(message, 'success');
+        addLog(message, 'success');
       }
 
       if (action === 'recover') {
@@ -855,7 +1282,9 @@ export default function App() {
             energy: stats?.max_energy || stats?.energy || 100,
             nerve: stats?.max_nerve || stats?.nerve || 20
           });
-          addLog(`🛠️ Admin: ${formatDisplayUsername(member.username)} volledig hersteld.`, 'success');
+          const message = `🛠️ Admin: ${formatDisplayUsername(member.username)} volledig hersteld.`;
+          showAdminNotice(message, 'success');
+          addLog(message, 'success');
           await refreshAdminMembers();
           return;
         }
@@ -865,7 +1294,9 @@ export default function App() {
           p_action: 'recover'
         });
         if (error) throw error;
-        addLog(`🛠️ Admin: ${formatDisplayUsername(member.username)} volledig hersteld.`, 'success');
+        const message = `🛠️ Admin: ${formatDisplayUsername(member.username)} volledig hersteld.`;
+        showAdminNotice(message, 'success');
+        addLog(message, 'success');
       }
 
       if (action === 'jail') {
@@ -876,7 +1307,9 @@ export default function App() {
         if (member.id === user?.id) {
           const selfJailUntil = new Date(Date.now() + ADMIN_JAIL_SECONDS * 1000).toISOString();
           await updateDB({ jail_until: selfJailUntil });
-          addLog(`🚓 Admin: je zit ${ADMIN_JAIL_SECONDS} sec in de cel.`, 'jail');
+          const message = `🚓 Admin: je zit ${ADMIN_JAIL_SECONDS} sec in de cel.`;
+          showAdminNotice(message, 'success');
+          addLog(message, 'jail');
           await refreshAdminMembers();
           return;
         }
@@ -931,18 +1364,21 @@ export default function App() {
           throw new Error('Jail actie lijkt niet opgeslagen. Voeg jail support toe in admin_apply_action of controleer RLS update policy.');
         }
 
-        addLog(`🚓 Admin: ${formatDisplayUsername(member.username)} zit ${ADMIN_JAIL_SECONDS} sec in de cel.`, 'jail');
+        const message = `🚓 Admin: ${formatDisplayUsername(member.username)} zit ${ADMIN_JAIL_SECONDS} sec in de cel.`;
+        showAdminNotice(message, 'success');
+        addLog(message, 'jail');
       }
 
       if (action.startsWith('set-role:')) {
         if (userRole !== 'admin') {
           throw new Error('Alleen admins mogen rollen wijzigen.');
         }
-        const nextRole = normalizeRole(action.replace('set-role:', ''));
 
-        if (member.id === user?.id && nextRole !== 'admin') {
-          throw new Error('Je kunt je eigen adminrechten niet verwijderen.');
+        if (member.id === user?.id) {
+          throw new Error('Je kunt je eigen rank niet wijzigen.');
         }
+
+        const nextRole = normalizeRole(action.replace('set-role:', ''));
 
         const { error } = await supabase.rpc('admin_apply_action', {
           p_target_id: member.id,
@@ -957,13 +1393,17 @@ export default function App() {
           throw error;
         }
 
-        addLog(`🛠️ Rol aangepast: ${formatDisplayUsername(member.username)} is nu ${nextRole}.`, 'success');
+        const message = `🛠️ Rol aangepast: ${formatDisplayUsername(member.username)} is nu ${nextRole}.`;
+        showAdminNotice(message, 'success');
+        addLog(message, 'success');
         setRankMenuOpenId(null);
       }
 
       await refreshAdminMembers();
     } catch (err) {
-      addLog(`❌ Admin actie mislukt: ${err.message}`, 'error');
+      const message = `❌ Admin actie mislukt: ${err.message}`;
+      showAdminNotice(message, 'error');
+      addLog(message, 'error');
     } finally {
       setAdminActionLoadingId(null);
     }
@@ -979,7 +1419,7 @@ export default function App() {
               onClick={() => {
                 setCityMenuOpen(false);
                 setActiveTab(tab);
-                setCurrentView(tab === 'misdaad' ? 'crime' : 'game');
+                setCurrentView(tab === 'misdaad' ? 'crime' : tab === 'sporten' ? 'sports' : 'game');
               }}
               className={`w-full px-3 py-1 rounded-lg text-base font-bold border transition ${
                 activeTab === tab
@@ -1058,6 +1498,30 @@ export default function App() {
     return 'text-slate-500';
   };
 
+  const roleNameColorClass = (value) => {
+    const role = normalizeRole(value);
+    if (role === 'admin') return 'text-rose-300';
+    if (role === 'moderator') return 'text-amber-300';
+    if (role === 'helper') return 'text-sky-300';
+    return 'text-slate-200';
+  };
+
+  const roleNameColorStyle = (value) => {
+    const role = normalizeRole(value);
+    if (role === 'admin') return { color: '#d08787' };
+    if (role === 'moderator') return { color: '#e3cc84' };
+    if (role === 'helper') return { color: '#8fc7df' };
+    return { color: '#d0ccc3' };
+  };
+
+  const filteredAdminMembers = adminMembers.filter((member) => {
+    const query = adminSearchTerm.trim().toLowerCase();
+    if (!query) return true;
+
+    const usernameValue = (member.username || '').toLowerCase();
+    return usernameValue.includes(query);
+  });
+
   const renderHeaderPlayerInfo = () => {
     if (!stats) return null;
 
@@ -1072,13 +1536,16 @@ export default function App() {
         : `+1 Lef in ${formatCountdown(recoveryTimers.nerve)}`;
 
     return (
-      <>
+            <>
         <div>
           <div className="flex items-center gap-2 mb-0.5">
             <Skull className="h-6 w-6 text-rose-500" />
             <p className="text-lg text-slate-100 font-extrabold uppercase tracking-wide leading-none">District Underworld</p>
           </div>
-          <h1 className="text-base font-bold text-white leading-tight">{stats?.username ? formatDisplayUsername(stats.username) : 'Onbekend'}</h1>
+          <h1 className="text-base font-bold leading-tight" style={roleNameColorStyle(userRole)}>{stats?.username ? formatDisplayUsername(stats.username) : 'Onbekend'}</h1>
+          <p className={`text-xs mt-0.5 ${roleColorClass(userRole)}`}>
+            {roleLabel(userRole)}
+          </p>
           <p className="text-[10px] text-slate-400 font-mono">
             Level {stats?.level || 1} • ${stats?.cash?.toLocaleString() || 0} • Energie {stats?.energy || 0}/{stats?.max_energy || 100} • Lef {stats?.nerve || 0}/{stats?.max_nerve || 20}
           </p>
@@ -1170,6 +1637,87 @@ export default function App() {
       setPrisonActionWarning('');
     }
   }, [currentView, jailTime]);
+
+  useEffect(() => {
+    if (!actionNotice) return;
+    const timer = setTimeout(() => setActionNotice(null), 3500);
+    return () => clearTimeout(timer);
+  }, [actionNotice]);
+
+  useEffect(() => {
+    if (!adminNotice) return;
+    const timer = setTimeout(() => setAdminNotice(null), 3500);
+    return () => clearTimeout(timer);
+  }, [adminNotice]);
+
+  useEffect(() => {
+    if (!user || currentView !== 'game') return;
+
+    didInitialChatScrollRef.current = false;
+    shouldAutoScrollChatRef.current = true;
+    requestAnimationFrame(() => {
+      scrollChatToBottom();
+    });
+
+    void refreshChatMessages();
+
+    const channel = supabase
+      .channel('messages-live')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'messages' },
+        (payload) => {
+          const incoming = payload.new;
+          void ensureChatUserRole(incoming?.username);
+          const container = chatScrollRef.current;
+          if (container) {
+            const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+            shouldAutoScrollChatRef.current = distanceFromBottom <= 80;
+          }
+
+          setChatMessages((prev) => {
+            if (prev.some((msg) => msg.id === incoming.id)) return prev;
+            return [...prev, incoming].slice(-100);
+          });
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'DELETE', schema: 'public', table: 'messages' },
+        (payload) => {
+          const deletedId = payload.old?.id;
+          if (!deletedId) return;
+          setChatMessages((prev) => prev.filter((message) => message.id !== deletedId));
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user, currentView]);
+
+  useEffect(() => {
+    const container = chatScrollRef.current;
+    if (!container) return;
+
+    if (shouldAutoScrollChatRef.current) {
+      requestAnimationFrame(() => {
+        scrollChatToBottom();
+      });
+    }
+  }, [chatMessages.length]);
+
+  useEffect(() => {
+    if (currentView !== 'game' || chatLoading || chatMessages.length === 0) return;
+    if (didInitialChatScrollRef.current) return;
+
+    requestAnimationFrame(() => {
+      scrollChatToBottom();
+      shouldAutoScrollChatRef.current = true;
+      didInitialChatScrollRef.current = true;
+    });
+  }, [currentView, chatLoading, chatMessages.length]);
 
   if (loading) {
     return (
@@ -1368,7 +1916,8 @@ export default function App() {
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl max-w-2xl mx-auto">
             <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-4">👤 Mijn profiel</h3>
             <div className="bg-slate-950 border border-slate-850 rounded-xl p-4 space-y-2.5 text-sm">
-              <p className="text-slate-300"><span className="text-slate-500">Gebruikersnaam:</span> {stats?.username ? formatDisplayUsername(stats.username) : 'Onbekend'}</p>
+              <p className="text-slate-300"><span className="text-slate-500">Gebruikersnaam:</span> <span style={roleNameColorStyle(userRole)}>{stats?.username ? formatDisplayUsername(stats.username) : 'Onbekend'}</span></p>
+              <p className="text-slate-300"><span className="text-slate-500">Rol:</span> <span className={roleColorClass(userRole)}>{roleLabel(userRole)}</span></p>
               <p className="text-slate-300"><span className="text-slate-500">E-mail:</span> {user?.email || email || 'Onbekend'}</p>
               <p className="text-slate-300"><span className="text-slate-500">Gender:</span> {formatGenderLabel(stats?.gender)}</p>
               <p className="text-slate-300"><span className="text-slate-500">Level:</span> {stats?.level || 1}</p>
@@ -1410,20 +1959,37 @@ export default function App() {
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl max-w-4xl mx-auto">
             <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-4">🛠️ Spelerbeheer</h3>
 
+            <div className="mb-4 flex flex-col sm:flex-row gap-2 sm:items-center sm:justify-between">
+              <input
+                type="text"
+                value={adminSearchTerm}
+                onChange={(e) => setAdminSearchTerm(e.target.value)}
+                placeholder="Zoek speler op gebruikersnaam..."
+                className="w-full sm:max-w-xs bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-rose-500 transition"
+              />
+              <span className="text-xs text-slate-500">{filteredAdminMembers.length} resultaat{filteredAdminMembers.length === 1 ? '' : 'en'}</span>
+            </div>
+
+            {adminNotice && (
+              <div className={`mb-4 rounded-xl border p-3 text-xs ${adminNotice.type === 'error' ? 'bg-red-950/30 border-red-800/40 text-red-200' : 'bg-emerald-950/30 border-emerald-800/40 text-emerald-200'}`}>
+                {adminNotice.text}
+              </div>
+            )}
+
             {adminLoading ? (
               <p className="text-xs text-slate-400">Spelers laden...</p>
-            ) : adminMembers.length === 0 ? (
+            ) : filteredAdminMembers.length === 0 ? (
               <p className="text-xs text-slate-500">Geen spelers gevonden.</p>
             ) : (
               <div className="space-y-2.5">
-                {adminMembers.map((member) => (
+                {filteredAdminMembers.map((member) => (
                   <div
                     key={member.id}
                     className={`bg-slate-950 border border-slate-850 rounded-xl p-3 relative ${rankMenuOpenId === member.id ? 'z-20' : ''}`}
                   >
                     <div className="flex justify-between items-center gap-3">
                       <div>
-                        <p className="text-sm font-semibold text-slate-200">{formatDisplayUsername(member.username || 'Onbekend')}</p>
+                        <p className="text-sm font-semibold" style={roleNameColorStyle(member.role)}>{formatDisplayUsername(member.username || 'Onbekend')}</p>
                         <p className="text-xs text-slate-400">
                           Level {member.level || 1} • ${member.cash?.toLocaleString() || 0}
                           {' • '}
@@ -1433,7 +1999,7 @@ export default function App() {
                         </p>
                       </div>
                       <div className="flex items-center gap-2">
-                        {canManageRoles && (
+                        {canManageRoles && member.id !== user?.id && (
                           <div className="relative">
                             <button
                               onClick={() => setRankMenuOpenId(prev => prev === member.id ? null : member.id)}
@@ -1476,13 +2042,30 @@ export default function App() {
                             )}
                           </div>
                         )}
-                        <button
-                          onClick={() => performAdminAction(member, 'cash')}
-                          disabled={adminActionLoadingId === member.id || !canGiveCash}
-                          className="staff-btn staff-btn-cash"
-                        >
-                          +$1.000
-                        </button>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            value={adminCashInputs[member.id] ?? '1.000'}
+                            onChange={(e) => setAdminCashInputs((prev) => ({ ...prev, [member.id]: formatAmountWithDots(e.target.value) }))}
+                            className="w-24 bg-slate-900 border border-slate-800 rounded-lg px-2 py-1 text-xs text-slate-200 focus:outline-none focus:border-rose-500 transition"
+                            placeholder="Bedrag"
+                          />
+                          <button
+                            onClick={() => performAdminAction(member, 'cash-adjust', { mode: 'add', amount: adminCashInputs[member.id] ?? '1.000' })}
+                            disabled={adminActionLoadingId === member.id || !canGiveCash}
+                            className="staff-btn staff-btn-cash"
+                          >
+                            Geef
+                          </button>
+                          <button
+                            onClick={() => performAdminAction(member, 'cash-adjust', { mode: 'remove', amount: adminCashInputs[member.id] ?? '1.000' })}
+                            disabled={adminActionLoadingId === member.id || !canGiveCash}
+                            className="staff-btn staff-btn-rank"
+                          >
+                            Neem af
+                          </button>
+                        </div>
                         <button
                           onClick={() => performAdminAction(member, 'recover')}
                           disabled={adminActionLoadingId === member.id || !canRecover}
@@ -1568,8 +2151,12 @@ export default function App() {
                     className="w-full text-left bg-slate-950 border border-slate-850 rounded-xl p-3 flex justify-between items-center hover:bg-slate-800 transition"
                     title="Open profiel"
                   >
-                    <span className="text-sm text-slate-200 font-semibold">{formatDisplayUsername(member.username || 'Onbekend')}</span>
-                    <span className="text-xs text-slate-400 font-mono">Level {member.level || 1}</span>
+                    <span className="text-sm font-semibold" style={roleNameColorStyle(member.role)}>{formatDisplayUsername(member.username || 'Onbekend')}</span>
+                    <span className="text-xs text-slate-400 font-mono">
+                      Level {member.level || 1}
+                      {' • '}
+                      <span className={roleColorClass(member.role)}>{roleLabel(member.role)}</span>
+                    </span>
                   </button>
                 ))}
               </div>
@@ -1618,9 +2205,10 @@ export default function App() {
 
         <main className="flex-grow p-6">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl max-w-2xl mx-auto">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-4">👤 {formatDisplayUsername(selectedMemberProfile.username || 'Onbekend')}</h3>
+            <h3 className="text-xs font-bold uppercase tracking-wider mb-4" style={roleNameColorStyle(selectedMemberProfile.role)}>👤 {formatDisplayUsername(selectedMemberProfile.username || 'Onbekend')}</h3>
             <div className="bg-slate-950 border border-slate-850 rounded-xl p-4 space-y-2.5 text-sm">
-              <p className="text-slate-300"><span className="text-slate-500">Gebruikersnaam:</span> {formatDisplayUsername(selectedMemberProfile.username || 'Onbekend')}</p>
+              <p className="text-slate-300"><span className="text-slate-500">Gebruikersnaam:</span> <span style={roleNameColorStyle(selectedMemberProfile.role)}>{formatDisplayUsername(selectedMemberProfile.username || 'Onbekend')}</span></p>
+              <p className="text-slate-300"><span className="text-slate-500">Rol:</span> <span className={roleColorClass(selectedMemberProfile.role)}>{roleLabel(selectedMemberProfile.role)}</span></p>
               <p className="text-slate-300"><span className="text-slate-500">Gender:</span> {formatGenderLabel(selectedMemberProfile.gender)}</p>
               <p className="text-slate-300"><span className="text-slate-500">Level:</span> {selectedMemberProfile.level || 1}</p>
             </div>
@@ -1677,6 +2265,12 @@ export default function App() {
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl max-w-3xl mx-auto">
             <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-4">💀 Misdaad operaties</h3>
 
+            {actionNotice && (
+              <div className={`mb-4 rounded-xl border p-3 text-xs ${actionNotice.type === 'error' ? 'bg-red-950/30 border-red-800/40 text-red-200' : 'bg-emerald-950/30 border-emerald-800/40 text-emerald-200'}`}>
+                {actionNotice.text}
+              </div>
+            )}
+
             {jailTime > 0 && (
               <div className="bg-red-950/40 border border-red-800/40 rounded-xl p-4 mb-4">
                 <p className="text-red-300 text-sm font-semibold">Je zit opgesloten.</p>
@@ -1715,6 +2309,86 @@ export default function App() {
                 <span className="bg-purple-550/10 text-purple-400 text-[10px] font-bold px-2 py-1 rounded font-mono border border-purple-500/20">-12 Nerve</span>
               </button>
             </div>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  if (currentView === 'sports') {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
+        <header className="bg-slate-900 border-b border-slate-800 py-4 px-6 flex flex-wrap justify-between items-center gap-4">
+          <div className="flex items-center gap-3">
+            {renderHeaderPlayerInfo()}
+          </div>
+          <div className="flex items-center gap-2">
+            {canOpenStaffPanel && (
+              <button
+                onClick={() => setCurrentView('admin')}
+                className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
+                title="Open admin functies"
+              >
+                Admin
+              </button>
+            )}
+            <button
+              onClick={() => setCurrentView('profile')}
+              className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
+              title="Toon mijn profiel"
+            >
+              Mijn profiel
+            </button>
+            <button
+              onClick={() => setCurrentView('online-members')}
+              className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
+              title="Toon online leden"
+            >
+              Online leden
+            </button>
+            <button
+              onClick={handleLogout}
+              className="p-2 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition"
+              title="Log uit"
+            >
+              <LogOut className="h-4 w-4" />
+            </button>
+          </div>
+        </header>
+
+        {renderTopTabs()}
+
+        <main className="flex-grow p-6">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl max-w-3xl mx-auto">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-4">🏋️ Sporten</h3>
+
+            {actionNotice && (
+              <div className={`mb-4 rounded-xl border p-3 text-xs ${actionNotice.type === 'error' ? 'bg-red-950/30 border-red-800/40 text-red-200' : 'bg-emerald-950/30 border-emerald-800/40 text-emerald-200'}`}>
+                {actionNotice.text}
+              </div>
+            )}
+
+            {jailTime > 0 && (
+              <div className="bg-red-950/40 border border-red-800/40 rounded-xl p-4 mb-4">
+                <p className="text-red-300 text-sm font-semibold">Je zit opgesloten.</p>
+                <p className="text-red-200/80 text-xs mt-1">Nog {jailTime} seconden. Sporten is tijdelijk geblokkeerd.</p>
+              </div>
+            )}
+
+            <button
+              onClick={handleTrain}
+              disabled={jailTime > 0}
+              className="w-full bg-slate-950 hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed text-white p-3.5 rounded-xl border border-slate-800 flex justify-between items-center transition"
+            >
+              <div className="flex items-center gap-3">
+                <span className="text-2xl">🏋️‍♂️</span>
+                <div className="text-left">
+                  <p className="text-sm font-semibold">Sportschool</p>
+                  <p className="text-xs text-slate-400">Verhoog permanent je kracht</p>
+                </div>
+              </div>
+              <span className="bg-amber-550/10 text-amber-400 text-[10px] font-bold px-2 py-1 rounded font-mono border border-amber-500/20">-10 Energie</span>
+            </button>
           </div>
         </main>
       </div>
@@ -1871,16 +2545,6 @@ export default function App() {
           {renderHeaderPlayerInfo()}
         </div>
         <div className="flex items-center gap-4">
-          <div className="text-right text-xs">
-            <p className="text-slate-400">Ingelogd als:</p>
-            <button
-              onClick={() => setCurrentView('profile')}
-              className="text-rose-400 font-bold hover:underline"
-              title="Open mijn profiel"
-            >
-              {stats?.username ? formatDisplayUsername(stats.username) : email}
-            </button>
-          </div>
             {canOpenStaffPanel && (
               <button
                 onClick={() => setCurrentView('admin')}
@@ -1927,7 +2591,7 @@ export default function App() {
             
             <div className="flex justify-between items-start mb-6">
               <div>
-                <h2 className="text-xl font-bold text-white tracking-tight">{stats?.username ? formatDisplayUsername(stats.username) : "Petty Criminal"}</h2>
+                <h2 className="text-xl font-bold tracking-tight" style={roleNameColorStyle(userRole)}>{stats?.username ? formatDisplayUsername(stats.username) : "Petty Criminal"}</h2>
                 <span className="text-xs bg-slate-800 text-slate-300 px-2.5 py-1 rounded font-mono block mt-1 w-fit">
                   Level {stats?.level || 1} • Kruimeldief
                 </span>
@@ -2006,66 +2670,6 @@ export default function App() {
             </div>
           )}
 
-          {/* GAME OPERATIONS */}
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl flex-grow flex flex-col justify-between">
-            <div>
-              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-4 flex items-center gap-1.5">
-                <Swords className="h-4 w-4" /> Misdaad Operaties
-              </h3>
-              
-              <div className="space-y-3">
-                {/* Gym */}
-                <button 
-                  onClick={handleTrain}
-                  className="w-full bg-slate-850 hover:bg-slate-800 active:bg-slate-900 text-white p-3.5 rounded-xl border border-slate-800 flex justify-between items-center transition"
-                >
-                  <div className="flex items-center gap-3">
-                    <span className="text-2xl">🏋️‍♂️</span>
-                    <div className="text-left">
-                      <p className="text-sm font-semibold">Sportschool</p>
-                      <p className="text-xs text-slate-400">Verhoog permanent je kracht</p>
-                    </div>
-                  </div>
-                  <span className="bg-amber-550/10 text-amber-400 text-[10px] font-bold px-2 py-1 rounded font-mono border border-amber-500/20">-10 Energie</span>
-                </button>
-
-                {/* Pickpocket */}
-                <button 
-                  onClick={handlePickpocket}
-                  className="w-full bg-slate-850 hover:bg-slate-800 active:bg-slate-900 text-white p-3.5 rounded-xl border border-slate-800 flex justify-between items-center transition"
-                >
-                  <div className="flex items-center gap-3">
-                    <span className="text-2xl">👛</span>
-                    <div className="text-left">
-                      <p className="text-sm font-semibold">Toerist Rollen</p>
-                      <p className="text-xs text-slate-400">75% kans op succes (Makkelijk)</p>
-                    </div>
-                  </div>
-                  <span className="bg-purple-550/10 text-purple-400 text-[10px] font-bold px-2 py-1 rounded font-mono border border-purple-500/20">-4 Nerve</span>
-                </button>
-
-                {/* Heist */}
-                <button 
-                  onClick={handleHeist}
-                  className="w-full bg-slate-850 hover:bg-rose-950/20 hover:border-rose-900/40 text-white p-3.5 rounded-xl border border-slate-800 flex justify-between items-center transition"
-                >
-                  <div className="flex items-center gap-3">
-                    <span className="text-2xl">🏦</span>
-                    <div className="text-left">
-                      <p className="text-sm font-semibold text-rose-300">Grote Kluis Overvallen</p>
-                      <p className="text-xs text-slate-400">Hoog risico op arrestatie, gigantische buit</p>
-                    </div>
-                  </div>
-                  <span className="bg-purple-550/10 text-purple-400 text-[10px] font-bold px-2 py-1 rounded font-mono border border-purple-500/20">-12 Nerve</span>
-                </button>
-              </div>
-            </div>
-
-            <div className="bg-slate-950 p-4 rounded-xl border border-slate-850/80 mt-6 text-xs text-slate-400 flex items-center gap-3">
-              <Award className="h-5 w-5 text-rose-500 shrink-0" />
-              <p>Energie (+1/min) & Nerve (+0.2/min) herstellen volautomatisch, zelfs als je offline bent!</p>
-            </div>
-          </div>
         </section>
 
         {/* GAME LOGS (Right 7 Cols) */}
@@ -2095,6 +2699,127 @@ export default function App() {
                 ))
               )}
             </div>
+          </div>
+
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl flex flex-col">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-bold uppercase text-slate-300" style={{ letterSpacing: '0.16em' }}>💬 Live Chat</h3>
+              <span className="text-sm text-slate-500">In-game</span>
+            </div>
+
+            <div
+              ref={chatScrollRef}
+              onScroll={handleChatScroll}
+              className="rounded-lg border border-slate-800 overflow-y-auto px-3 py-2.5"
+              style={{
+                backgroundColor: '#020917',
+                maxHeight: `${Math.round(CHAT_MAX_VISIBLE_LINES * CHAT_FONT_SIZE_PX * CHAT_LINE_HEIGHT + 24)}px`
+              }}
+            >
+              {chatLoading ? (
+                <p className="text-sm text-slate-400">Chat laden...</p>
+              ) : chatMessages.length === 0 ? (
+                <p className="text-sm text-slate-400">Nog geen berichten. Start de chat!</p>
+              ) : (
+                chatMessages.map((message, index) => {
+                  const ownMessage = isOwnChatMessage(message.username);
+                  const displayName = formatDisplayUsername(message.username || 'Onbekend');
+                  const normalizedName = (displayName || '').trim().toLowerCase();
+                  const isSystemMessage = normalizedName === 'systeem' || normalizedName === 'system';
+                  const chatRole = ownMessage
+                    ? userRole
+                    : (chatUserRoles[getChatUsernameKey(message.username)] || 'lid');
+                  const nameClass = isSystemMessage ? 'text-emerald-400' : '';
+                  const nameStyle = isSystemMessage ? undefined : roleNameColorStyle(chatRole);
+                  const canOpenProfile = !isSystemMessage;
+                  const canDeleteMessage = userRole === 'admin';
+
+                  return (
+                    <div key={message.id} className="flex items-start gap-2 mb-0.5">
+                      <p className="text-xs text-slate-100 break-words flex-1 min-w-0" style={{ lineHeight: 1.45 }}>
+                        <span
+                          className="text-slate-500 mr-2 font-mono"
+                          style={{ display: 'inline-block', width: '68px', fontVariantNumeric: 'tabular-nums' }}
+                        >
+                          [{formatChatTime(message.created_at)}]
+                        </span>
+                        {canOpenProfile ? (
+                          <span
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => {
+                              void handleOpenChatProfile(message.username);
+                            }}
+                            onKeyDown={(event) => {
+                              if (event.key !== 'Enter' && event.key !== ' ') return;
+                              event.preventDefault();
+                              void handleOpenChatProfile(message.username);
+                            }}
+                            className={`${nameClass} font-semibold mr-2 cursor-pointer hover:underline focus:underline outline-none`}
+                            style={nameStyle}
+                            title={`Open profiel van ${displayName}`}
+                          >
+                            {displayName}:
+                          </span>
+                        ) : (
+                          <span className={`${nameClass} font-semibold mr-2`} style={nameStyle}>{displayName}:</span>
+                        )}
+                        <span className="text-slate-100">{message.content}</span>
+                      </p>
+
+                      {canDeleteMessage && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            void handleDeleteChatMessage(message.id);
+                          }}
+                          disabled={chatDeletingId === message.id}
+                          className="text-[10px] px-1.5 py-0.5 border border-red-800/60 text-red-300 rounded hover:bg-red-950/40 disabled:opacity-50 disabled:cursor-not-allowed transition"
+                          title="Verwijder bericht"
+                        >
+                          {chatDeletingId === message.id ? '...' : 'X'}
+                        </button>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            <form
+              onSubmit={handleSendChatMessage}
+              className="mt-0 border border-slate-800 border-t-0 rounded-b-lg overflow-hidden"
+              style={{ display: 'grid', gridTemplateColumns: '1fr auto', width: '100%' }}
+            >
+              <input
+                type="text"
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                onKeyDown={handleChatInputKeyDown}
+                placeholder="Typ hier je bericht en druk Enter..."
+                maxLength={280}
+                className="min-w-0 px-4 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none"
+                style={{
+                  backgroundColor: '#020917',
+                  color: '#e5e7eb',
+                  caretColor: '#e5e7eb'
+                }}
+              />
+              <button
+                type="submit"
+                disabled={chatSending || !chatInput.trim()}
+                className="whitespace-nowrap px-4 py-2 text-sm font-bold disabled:opacity-50 disabled:cursor-not-allowed transition"
+                style={{ backgroundColor: '#6ee7b7', color: '#0f172a', minWidth: '112px' }}
+              >
+                Verstuur
+              </button>
+            </form>
+
+            {!chatLoading && chatMessages.length > 0 && (
+              <p className="mt-2 text-center text-xs text-slate-500">
+                Laatste bericht: {formatChatTime(chatMessages[chatMessages.length - 1]?.created_at)}
+              </p>
+            )}
           </div>
         </section>
       </main>
