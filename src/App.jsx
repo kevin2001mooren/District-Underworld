@@ -1615,25 +1615,19 @@ export default function App() {
             💬 Live Chat
             {chatUnreadCount > 0 && (
               <span
-                className="text-xs font-bold rounded-full"
+                className="rounded-full"
                 style={{
                   position: 'absolute',
-                  top: '-8px',
-                  right: '-8px',
-                  minWidth: '20px',
-                  height: '20px',
-                  padding: '0 6px',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
+                  top: '-4px',
+                  right: '-4px',
+                  width: '12px',
+                  height: '12px',
                   backgroundColor: '#ef4444',
-                  color: '#ffffff',
-                  border: '1px solid rgba(255,255,255,0.3)'
+                  border: '1px solid rgba(255,255,255,0.45)',
+                  boxShadow: '0 0 0 2px rgba(2, 9, 23, 0.9)'
                 }}
-                title={`${chatUnreadCount} ongelezen bericht${chatUnreadCount === 1 ? '' : 'en'}`}
-              >
-                {chatUnreadCount > 99 ? '99+' : chatUnreadCount}
-              </span>
+                title="Nieuwe chatberichten"
+              />
             )}
           </button>
         )}
