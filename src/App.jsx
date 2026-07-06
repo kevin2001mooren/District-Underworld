@@ -80,12 +80,15 @@ export default function App() {
   const [chatDeletingId, setChatDeletingId] = useState(null);
   const [chatDeleteHoverId, setChatDeleteHoverId] = useState(null);
   const [chatUserRoles, setChatUserRoles] = useState({});
+  const [isChatWidgetOpen, setIsChatWidgetOpen] = useState(false);
+  const [chatUnreadCount, setChatUnreadCount] = useState(0);
   const dashboardScrollRef = useRef(null);
   const chatScrollRef = useRef(null);
   const shouldAutoScrollChatRef = useRef(true);
   const didInitialChatScrollRef = useRef(false);
   const chatUserRolesRef = useRef({});
   const forceChatBottomRef = useRef(false);
+  const isChatWidgetOpenRef = useRef(false);
 
   const scrollChatToBottom = (remainingPasses = 4) => {
     const container = chatScrollRef.current;
@@ -332,6 +335,13 @@ export default function App() {
   useEffect(() => {
     chatUserRolesRef.current = chatUserRoles;
   }, [chatUserRoles]);
+
+  useEffect(() => {
+    isChatWidgetOpenRef.current = isChatWidgetOpen;
+    if (isChatWidgetOpen) {
+      setChatUnreadCount(0);
+    }
+  }, [isChatWidgetOpen]);
 
   const fetchRolesForChatUsernames = async (usernames) => {
     const normalized = Array.from(new Set((usernames || [])
@@ -1435,6 +1445,202 @@ export default function App() {
     }
   };
 
+  const renderLiveChatWidget = () => {
+    if (!user) return null;
+
+    return (
+      <div
+        style={{
+          position: 'fixed',
+          right: '16px',
+          bottom: '16px',
+          zIndex: 500,
+          width: 'min(420px, calc(100vw - 24px))'
+        }}
+      >
+        {isChatWidgetOpen ? (
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl shadow-xl overflow-hidden">
+            <div className="px-3 py-2 border-b border-slate-800 flex items-center justify-between">
+              <div className="text-xs font-bold uppercase tracking-wider text-slate-300">💬 Live Chat</div>
+              <button
+                type="button"
+                onClick={() => setIsChatWidgetOpen(false)}
+                className="px-2 py-1 text-xs rounded border border-slate-700 text-slate-300 hover:bg-slate-800"
+                title="Chat inklappen"
+              >
+                -
+              </button>
+            </div>
+
+            <div
+              ref={chatScrollRef}
+              onScroll={handleChatScroll}
+              className="overflow-y-auto px-3 py-2.5"
+              style={{
+                backgroundColor: '#020917',
+                maxHeight: `${Math.round(CHAT_MAX_VISIBLE_LINES * CHAT_FONT_SIZE_PX * CHAT_LINE_HEIGHT + 24)}px`
+              }}
+            >
+              {chatLoading ? (
+                <p className="text-sm text-slate-400">Chat laden...</p>
+              ) : chatMessages.length === 0 ? (
+                <p className="text-sm text-slate-400">Nog geen berichten. Start de chat!</p>
+              ) : (
+                chatMessages.map((message) => {
+                  const ownMessage = isOwnChatMessage(message.username);
+                  const displayName = formatDisplayUsername(message.username || 'Onbekend');
+                  const normalizedName = (displayName || '').trim().toLowerCase();
+                  const isSystemMessage = normalizedName === 'systeem' || normalizedName === 'system';
+                  const chatRole = ownMessage
+                    ? userRole
+                    : (chatUserRoles[getChatUsernameKey(message.username)] || 'lid');
+                  const nameClass = isSystemMessage ? 'text-emerald-400' : '';
+                  const nameStyle = isSystemMessage ? undefined : roleNameColorStyle(chatRole);
+                  const canOpenProfile = !isSystemMessage;
+                  const canDeleteMessage = userRole === 'admin';
+
+                  return (
+                    <div
+                      key={message.id}
+                      className="flex items-start gap-2 mb-0.5 rounded px-1 py-0.5 transition"
+                      style={{
+                        width: '100%',
+                        backgroundColor: chatDeleteHoverId === message.id ? 'rgba(127, 29, 29, 0.22)' : 'transparent',
+                        outline: chatDeleteHoverId === message.id ? '1px solid rgba(248, 113, 113, 0.35)' : 'none'
+                      }}
+                    >
+                      <div className="text-xs text-slate-100" style={{ lineHeight: 1.45, flex: '1 1 auto', minWidth: 0, display: 'flex', alignItems: 'flex-start' }}>
+                        <div style={{ display: 'inline-flex', alignItems: 'baseline', flexShrink: 0, whiteSpace: 'nowrap' }}>
+                          <span
+                            className="text-slate-500 mr-2 font-mono"
+                            style={{ display: 'inline-block', width: '68px', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}
+                          >
+                            [{formatChatTime(message.created_at)}]
+                          </span>
+                          {canOpenProfile ? (
+                            <span
+                              role="button"
+                              tabIndex={0}
+                              onClick={() => {
+                                void handleOpenChatProfile(message.username);
+                              }}
+                              onKeyDown={(event) => {
+                                if (event.key !== 'Enter' && event.key !== ' ') return;
+                                event.preventDefault();
+                                void handleOpenChatProfile(message.username);
+                              }}
+                              className={`${nameClass} font-semibold mr-2 cursor-pointer hover:underline focus:underline outline-none`}
+                              style={{ ...nameStyle, whiteSpace: 'nowrap' }}
+                              title={`Open profiel van ${displayName}`}
+                            >
+                              {displayName}:
+                            </span>
+                          ) : (
+                            <span className={`${nameClass} font-semibold mr-2`} style={{ ...nameStyle, whiteSpace: 'nowrap' }}>{displayName}:</span>
+                          )}
+                        </div>
+
+                        <span className="text-slate-100 break-words" style={{ flex: '1 1 auto', minWidth: 0 }}>
+                          {message.content}
+                        </span>
+                      </div>
+
+                      {canDeleteMessage && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            void handleDeleteChatMessage(message.id);
+                          }}
+                          onMouseEnter={() => setChatDeleteHoverId(message.id)}
+                          onMouseLeave={() => setChatDeleteHoverId(null)}
+                          onFocus={() => setChatDeleteHoverId(message.id)}
+                          onBlur={() => setChatDeleteHoverId(null)}
+                          disabled={chatDeletingId === message.id}
+                          className="text-[10px] px-1.5 py-0.5 border border-red-800/60 text-red-300 rounded hover:bg-red-950/40 disabled:opacity-50 disabled:cursor-not-allowed transition"
+                          style={{ flexShrink: 0, alignSelf: 'flex-start' }}
+                          title="Verwijder bericht"
+                        >
+                          {chatDeletingId === message.id ? '...' : 'X'}
+                        </button>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            <form
+              onSubmit={handleSendChatMessage}
+              className="border-t border-slate-800 overflow-hidden"
+              style={{ display: 'grid', gridTemplateColumns: '1fr auto', width: '100%' }}
+            >
+              <input
+                type="text"
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                onKeyDown={handleChatInputKeyDown}
+                placeholder="Typ hier je bericht en druk Enter..."
+                maxLength={280}
+                className="min-w-0 px-4 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none"
+                style={{
+                  backgroundColor: '#020917',
+                  color: '#e5e7eb',
+                  caretColor: '#e5e7eb'
+                }}
+              />
+              <button
+                type="submit"
+                disabled={chatSending || !chatInput.trim()}
+                className="whitespace-nowrap px-4 py-2 text-sm font-bold disabled:opacity-50 disabled:cursor-not-allowed transition"
+                style={{ backgroundColor: '#6ee7b7', color: '#0f172a', minWidth: '112px' }}
+              >
+                Verstuur
+              </button>
+            </form>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => {
+              setIsChatWidgetOpen(true);
+              setChatUnreadCount(0);
+              shouldAutoScrollChatRef.current = true;
+              requestAnimationFrame(() => {
+                scrollChatToBottom();
+              });
+            }}
+            className="px-4 py-2 rounded-xl border border-slate-700 bg-slate-900 text-slate-100 text-sm font-semibold shadow-lg hover:bg-slate-800"
+            style={{ marginLeft: 'auto', display: 'block', position: 'relative' }}
+          >
+            💬 Live Chat
+            {chatUnreadCount > 0 && (
+              <span
+                className="text-xs font-bold rounded-full"
+                style={{
+                  position: 'absolute',
+                  top: '-8px',
+                  right: '-8px',
+                  minWidth: '20px',
+                  height: '20px',
+                  padding: '0 6px',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  backgroundColor: '#ef4444',
+                  color: '#ffffff',
+                  border: '1px solid rgba(255,255,255,0.3)'
+                }}
+                title={`${chatUnreadCount} ongelezen bericht${chatUnreadCount === 1 ? '' : 'en'}`}
+              >
+                {chatUnreadCount > 99 ? '99+' : chatUnreadCount}
+              </span>
+            )}
+          </button>
+        )}
+      </div>
+    );
+  };
+
   const renderTopTabs = () => (
     <div className="bg-slate-900 border-b border-slate-800 px-6 py-2 grid grid-cols-7 gap-2 w-full relative" style={{ zIndex: 200 }}>
       {NAV_TABS.map((tab) => {
@@ -1685,7 +1891,7 @@ export default function App() {
   }, [adminNotice]);
 
   useEffect(() => {
-    if (!user || currentView !== 'game') return;
+    if (!user) return;
 
     didInitialChatScrollRef.current = false;
     shouldAutoScrollChatRef.current = true;
@@ -1701,6 +1907,12 @@ export default function App() {
         (payload) => {
           const incoming = payload.new;
           void ensureChatUserRole(incoming?.username);
+
+          const incomingIsOwn = isOwnChatMessage(incoming?.username);
+          if (!isChatWidgetOpenRef.current && !incomingIsOwn) {
+            setChatUnreadCount((prev) => prev + 1);
+          }
+
           const container = chatScrollRef.current;
           if (container) {
             const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
@@ -1968,6 +2180,7 @@ export default function App() {
             </div>
           </div>
         </main>
+        {renderLiveChatWidget()}
       </div>
     );
   }
@@ -2132,6 +2345,7 @@ export default function App() {
             )}
           </div>
         </main>
+        {renderLiveChatWidget()}
       </div>
     );
   }
@@ -2207,6 +2421,7 @@ export default function App() {
             )}
           </div>
         </main>
+        {renderLiveChatWidget()}
       </div>
     );
   }
@@ -2258,6 +2473,7 @@ export default function App() {
             </div>
           </div>
         </main>
+        {renderLiveChatWidget()}
       </div>
     );
   }
@@ -2355,6 +2571,7 @@ export default function App() {
             </div>
           </div>
         </main>
+        {renderLiveChatWidget()}
       </div>
     );
   }
@@ -2435,6 +2652,7 @@ export default function App() {
             </button>
           </div>
         </main>
+        {renderLiveChatWidget()}
       </div>
     );
   }
@@ -2576,6 +2794,7 @@ export default function App() {
             </div>
           </div>
         </main>
+        {renderLiveChatWidget()}
       </div>
     );
   }
@@ -2745,146 +2964,9 @@ export default function App() {
             </div>
           </div>
 
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl flex flex-col">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-bold uppercase text-slate-300" style={{ letterSpacing: '0.16em' }}>💬 Live Chat</h3>
-              <span className="text-sm text-slate-500">In-game</span>
-            </div>
-
-            <div
-              ref={chatScrollRef}
-              onScroll={handleChatScroll}
-              className="rounded-lg border border-slate-800 overflow-y-auto px-3 py-2.5"
-              style={{
-                backgroundColor: '#020917',
-                maxHeight: `${Math.round(CHAT_MAX_VISIBLE_LINES * CHAT_FONT_SIZE_PX * CHAT_LINE_HEIGHT + 24)}px`
-              }}
-            >
-              {chatLoading ? (
-                <p className="text-sm text-slate-400">Chat laden...</p>
-              ) : chatMessages.length === 0 ? (
-                <p className="text-sm text-slate-400">Nog geen berichten. Start de chat!</p>
-              ) : (
-                chatMessages.map((message, index) => {
-                  const ownMessage = isOwnChatMessage(message.username);
-                  const displayName = formatDisplayUsername(message.username || 'Onbekend');
-                  const normalizedName = (displayName || '').trim().toLowerCase();
-                  const isSystemMessage = normalizedName === 'systeem' || normalizedName === 'system';
-                  const chatRole = ownMessage
-                    ? userRole
-                    : (chatUserRoles[getChatUsernameKey(message.username)] || 'lid');
-                  const nameClass = isSystemMessage ? 'text-emerald-400' : '';
-                  const nameStyle = isSystemMessage ? undefined : roleNameColorStyle(chatRole);
-                  const canOpenProfile = !isSystemMessage;
-                  const canDeleteMessage = userRole === 'admin';
-
-                  return (
-                    <div
-                      key={message.id}
-                      className="flex items-start gap-2 mb-0.5 rounded px-1 py-0.5 transition"
-                      style={{
-                        width: '100%',
-                        backgroundColor: chatDeleteHoverId === message.id ? 'rgba(127, 29, 29, 0.22)' : 'transparent',
-                        outline: chatDeleteHoverId === message.id ? '1px solid rgba(248, 113, 113, 0.35)' : 'none'
-                      }}
-                    >
-                      <div className="text-xs text-slate-100" style={{ lineHeight: 1.45, flex: '1 1 auto', minWidth: 0, display: 'flex', alignItems: 'flex-start' }}>
-                        <div style={{ display: 'inline-flex', alignItems: 'baseline', flexShrink: 0, whiteSpace: 'nowrap' }}>
-                          <span
-                            className="text-slate-500 mr-2 font-mono"
-                            style={{ display: 'inline-block', width: '68px', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}
-                          >
-                            [{formatChatTime(message.created_at)}]
-                          </span>
-                          {canOpenProfile ? (
-                            <span
-                              role="button"
-                              tabIndex={0}
-                              onClick={() => {
-                                void handleOpenChatProfile(message.username);
-                              }}
-                              onKeyDown={(event) => {
-                                if (event.key !== 'Enter' && event.key !== ' ') return;
-                                event.preventDefault();
-                                void handleOpenChatProfile(message.username);
-                              }}
-                              className={`${nameClass} font-semibold mr-2 cursor-pointer hover:underline focus:underline outline-none`}
-                              style={{ ...nameStyle, whiteSpace: 'nowrap' }}
-                              title={`Open profiel van ${displayName}`}
-                            >
-                              {displayName}:
-                            </span>
-                          ) : (
-                            <span className={`${nameClass} font-semibold mr-2`} style={{ ...nameStyle, whiteSpace: 'nowrap' }}>{displayName}:</span>
-                          )}
-                        </div>
-
-                        <span className="text-slate-100 break-words" style={{ flex: '1 1 auto', minWidth: 0 }}>
-                          {message.content}
-                        </span>
-                      </div>
-
-                      {canDeleteMessage && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            void handleDeleteChatMessage(message.id);
-                          }}
-                          onMouseEnter={() => setChatDeleteHoverId(message.id)}
-                          onMouseLeave={() => setChatDeleteHoverId(null)}
-                          onFocus={() => setChatDeleteHoverId(message.id)}
-                          onBlur={() => setChatDeleteHoverId(null)}
-                          disabled={chatDeletingId === message.id}
-                          className="text-[10px] px-1.5 py-0.5 border border-red-800/60 text-red-300 rounded hover:bg-red-950/40 disabled:opacity-50 disabled:cursor-not-allowed transition"
-                          style={{ flexShrink: 0, alignSelf: 'flex-start' }}
-                          title="Verwijder bericht"
-                        >
-                          {chatDeletingId === message.id ? '...' : 'X'}
-                        </button>
-                      )}
-                    </div>
-                  );
-                })
-              )}
-            </div>
-
-            <form
-              onSubmit={handleSendChatMessage}
-              className="mt-0 border border-slate-800 border-t-0 rounded-b-lg overflow-hidden"
-              style={{ display: 'grid', gridTemplateColumns: '1fr auto', width: '100%' }}
-            >
-              <input
-                type="text"
-                value={chatInput}
-                onChange={(e) => setChatInput(e.target.value)}
-                onKeyDown={handleChatInputKeyDown}
-                placeholder="Typ hier je bericht en druk Enter..."
-                maxLength={280}
-                className="min-w-0 px-4 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none"
-                style={{
-                  backgroundColor: '#020917',
-                  color: '#e5e7eb',
-                  caretColor: '#e5e7eb'
-                }}
-              />
-              <button
-                type="submit"
-                disabled={chatSending || !chatInput.trim()}
-                className="whitespace-nowrap px-4 py-2 text-sm font-bold disabled:opacity-50 disabled:cursor-not-allowed transition"
-                style={{ backgroundColor: '#6ee7b7', color: '#0f172a', minWidth: '112px' }}
-              >
-                Verstuur
-              </button>
-            </form>
-
-            {!chatLoading && chatMessages.length > 0 && (
-              <p className="mt-2 text-center text-xs text-slate-500">
-                Laatste bericht: {formatChatTime(chatMessages[chatMessages.length - 1]?.created_at)}
-              </p>
-            )}
-          </div>
         </section>
       </main>
+      {renderLiveChatWidget()}
     </div>
   );
 }
