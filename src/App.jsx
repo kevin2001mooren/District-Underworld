@@ -1454,8 +1454,9 @@ export default function App() {
           position: 'fixed',
           right: '16px',
           bottom: '16px',
-          zIndex: 500,
-          width: 'min(420px, calc(100vw - 24px))'
+          zIndex: 9999,
+          width: 'min(420px, calc(100vw - 24px))',
+          maxWidth: '420px'
         }}
       >
         {isChatWidgetOpen ? (
@@ -1478,7 +1479,7 @@ export default function App() {
               className="overflow-y-auto px-3 py-2.5"
               style={{
                 backgroundColor: '#020917',
-                maxHeight: `${Math.round(CHAT_MAX_VISIBLE_LINES * CHAT_FONT_SIZE_PX * CHAT_LINE_HEIGHT + 24)}px`
+                maxHeight: `min(${Math.round(CHAT_MAX_VISIBLE_LINES * CHAT_FONT_SIZE_PX * CHAT_LINE_HEIGHT + 24)}px, calc(100vh - 220px))`
               }}
             >
               {chatLoading ? (
