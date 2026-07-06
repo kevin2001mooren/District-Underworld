@@ -78,16 +78,42 @@ export default function App() {
   const [chatLoading, setChatLoading] = useState(false);
   const [chatSending, setChatSending] = useState(false);
   const [chatDeletingId, setChatDeletingId] = useState(null);
+  const [chatDeleteHoverId, setChatDeleteHoverId] = useState(null);
   const [chatUserRoles, setChatUserRoles] = useState({});
+  const dashboardScrollRef = useRef(null);
   const chatScrollRef = useRef(null);
   const shouldAutoScrollChatRef = useRef(true);
   const didInitialChatScrollRef = useRef(false);
   const chatUserRolesRef = useRef({});
+  const forceChatBottomRef = useRef(false);
 
-  const scrollChatToBottom = () => {
+  const scrollChatToBottom = (remainingPasses = 4) => {
     const container = chatScrollRef.current;
+    if (!container) return false;
+    container.scrollTo({ top: container.scrollHeight, behavior: 'auto' });
+
+    const atBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 1;
+    if (atBottom) return true;
+
+    if (remainingPasses <= 0) return false;
+    requestAnimationFrame(() => {
+      scrollChatToBottom(remainingPasses - 1);
+    });
+
+    return false;
+  };
+
+  const scrollDashboardToTop = (remainingPasses = 4) => {
+    const container = dashboardScrollRef.current;
     if (!container) return;
-    container.scrollTop = container.scrollHeight;
+    container.scrollTo({ top: 0, behavior: 'auto' });
+
+    if (container.scrollTop <= 0) return;
+    if (remainingPasses <= 0) return;
+
+    requestAnimationFrame(() => {
+      scrollDashboardToTop(remainingPasses - 1);
+    });
   };
 
   const normalizeRole = (value) => {
@@ -1418,6 +1444,14 @@ export default function App() {
               key={tab}
               onClick={() => {
                 setCityMenuOpen(false);
+                if (tab === 'overzicht') {
+                  setActiveTab('overzicht');
+                  setCurrentView('game');
+                  scrollDashboardToTop();
+                  shouldAutoScrollChatRef.current = true;
+                  forceChatBottomRef.current = true;
+                  return;
+                }
                 setActiveTab(tab);
                 setCurrentView(tab === 'misdaad' ? 'crime' : tab === 'sporten' ? 'sports' : 'game');
               }}
@@ -1508,10 +1542,10 @@ export default function App() {
 
   const roleNameColorStyle = (value) => {
     const role = normalizeRole(value);
-    if (role === 'admin') return { color: '#d08787' };
-    if (role === 'moderator') return { color: '#e3cc84' };
-    if (role === 'helper') return { color: '#4f86a1' };
-    return { color: '#d0ccc3' };
+    if (role === 'admin') return { color: '#c86f6f' };
+    if (role === 'moderator') return { color: '#d4af37' };
+    if (role === 'helper') return { color: '#5a93af' };
+    return { color: '#89837a' };
   };
 
   const filteredAdminMembers = adminMembers.filter((member) => {
@@ -1655,9 +1689,7 @@ export default function App() {
 
     didInitialChatScrollRef.current = false;
     shouldAutoScrollChatRef.current = true;
-    requestAnimationFrame(() => {
-      scrollChatToBottom();
-    });
+    scrollChatToBottom();
 
     void refreshChatMessages();
 
@@ -1699,24 +1731,36 @@ export default function App() {
 
   useEffect(() => {
     const container = chatScrollRef.current;
-    if (!container) return;
+    if (!container || chatLoading) return;
 
     if (shouldAutoScrollChatRef.current) {
-      requestAnimationFrame(() => {
-        scrollChatToBottom();
-      });
+      scrollChatToBottom();
     }
-  }, [chatMessages.length]);
+  }, [chatMessages, chatLoading]);
+
+  useEffect(() => {
+    if (currentView !== 'game' || activeTab !== 'overzicht') return;
+
+    if (!forceChatBottomRef.current) return;
+    if (chatLoading) return;
+
+    const container = chatScrollRef.current;
+    if (!container) return;
+
+    shouldAutoScrollChatRef.current = true;
+    const didReachBottom = scrollChatToBottom();
+    if (didReachBottom && chatMessages.length > 0) {
+      forceChatBottomRef.current = false;
+    }
+  }, [currentView, activeTab, chatLoading, chatMessages]);
 
   useEffect(() => {
     if (currentView !== 'game' || chatLoading || chatMessages.length === 0) return;
     if (didInitialChatScrollRef.current) return;
 
-    requestAnimationFrame(() => {
-      scrollChatToBottom();
-      shouldAutoScrollChatRef.current = true;
-      didInitialChatScrollRef.current = true;
-    });
+    scrollChatToBottom();
+    shouldAutoScrollChatRef.current = true;
+    didInitialChatScrollRef.current = true;
   }, [currentView, chatLoading, chatMessages.length]);
 
   if (loading) {
@@ -2581,7 +2625,7 @@ export default function App() {
       {renderTopTabs()}
 
       {/* GAME SECTION */}
-      <main className="flex-grow grid grid-cols-1 lg:grid-cols-12 gap-6 p-6 overflow-y-auto">
+      <main ref={dashboardScrollRef} className="flex-grow grid grid-cols-1 lg:grid-cols-12 gap-6 p-6 overflow-y-auto">
         {/* STATS & ACTIONS (Left 5 Cols) */}
         <section className="lg:col-span-5 flex flex-col gap-6">
           
@@ -2735,8 +2779,16 @@ export default function App() {
                   const canDeleteMessage = userRole === 'admin';
 
                   return (
-                    <div key={message.id} className="flex items-start gap-2 mb-0.5">
-                      <p className="text-xs text-slate-100 break-words flex-1 min-w-0" style={{ lineHeight: 1.45 }}>
+                    <div
+                      key={message.id}
+                      className="flex items-start gap-2 mb-0.5 rounded px-1 py-0.5 transition"
+                      style={{
+                        width: '100%',
+                        backgroundColor: chatDeleteHoverId === message.id ? 'rgba(127, 29, 29, 0.22)' : 'transparent',
+                        outline: chatDeleteHoverId === message.id ? '1px solid rgba(248, 113, 113, 0.35)' : 'none'
+                      }}
+                    >
+                      <p className="text-xs text-slate-100 break-words" style={{ lineHeight: 1.45, flex: '1 1 auto', minWidth: 0, margin: 0 }}>
                         <span
                           className="text-slate-500 mr-2 font-mono"
                           style={{ display: 'inline-block', width: '68px', fontVariantNumeric: 'tabular-nums' }}
@@ -2773,8 +2825,13 @@ export default function App() {
                           onClick={() => {
                             void handleDeleteChatMessage(message.id);
                           }}
+                          onMouseEnter={() => setChatDeleteHoverId(message.id)}
+                          onMouseLeave={() => setChatDeleteHoverId(null)}
+                          onFocus={() => setChatDeleteHoverId(message.id)}
+                          onBlur={() => setChatDeleteHoverId(null)}
                           disabled={chatDeletingId === message.id}
                           className="text-[10px] px-1.5 py-0.5 border border-red-800/60 text-red-300 rounded hover:bg-red-950/40 disabled:opacity-50 disabled:cursor-not-allowed transition"
+                          style={{ flexShrink: 0, alignSelf: 'flex-start' }}
                           title="Verwijder bericht"
                         >
                           {chatDeletingId === message.id ? '...' : 'X'}
