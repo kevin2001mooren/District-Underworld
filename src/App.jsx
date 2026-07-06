@@ -2788,36 +2788,41 @@ export default function App() {
                         outline: chatDeleteHoverId === message.id ? '1px solid rgba(248, 113, 113, 0.35)' : 'none'
                       }}
                     >
-                      <p className="text-xs text-slate-100 break-words" style={{ lineHeight: 1.45, flex: '1 1 auto', minWidth: 0, margin: 0 }}>
-                        <span
-                          className="text-slate-500 mr-2 font-mono"
-                          style={{ display: 'inline-block', width: '68px', fontVariantNumeric: 'tabular-nums' }}
-                        >
-                          [{formatChatTime(message.created_at)}]
-                        </span>
-                        {canOpenProfile ? (
+                      <div className="text-xs text-slate-100" style={{ lineHeight: 1.45, flex: '1 1 auto', minWidth: 0, display: 'flex', alignItems: 'flex-start' }}>
+                        <div style={{ display: 'inline-flex', alignItems: 'baseline', flexShrink: 0, whiteSpace: 'nowrap' }}>
                           <span
-                            role="button"
-                            tabIndex={0}
-                            onClick={() => {
-                              void handleOpenChatProfile(message.username);
-                            }}
-                            onKeyDown={(event) => {
-                              if (event.key !== 'Enter' && event.key !== ' ') return;
-                              event.preventDefault();
-                              void handleOpenChatProfile(message.username);
-                            }}
-                            className={`${nameClass} font-semibold mr-2 cursor-pointer hover:underline focus:underline outline-none`}
-                            style={nameStyle}
-                            title={`Open profiel van ${displayName}`}
+                            className="text-slate-500 mr-2 font-mono"
+                            style={{ display: 'inline-block', width: '68px', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}
                           >
-                            {displayName}:
+                            [{formatChatTime(message.created_at)}]
                           </span>
-                        ) : (
-                          <span className={`${nameClass} font-semibold mr-2`} style={nameStyle}>{displayName}:</span>
-                        )}
-                        <span className="text-slate-100">{message.content}</span>
-                      </p>
+                          {canOpenProfile ? (
+                            <span
+                              role="button"
+                              tabIndex={0}
+                              onClick={() => {
+                                void handleOpenChatProfile(message.username);
+                              }}
+                              onKeyDown={(event) => {
+                                if (event.key !== 'Enter' && event.key !== ' ') return;
+                                event.preventDefault();
+                                void handleOpenChatProfile(message.username);
+                              }}
+                              className={`${nameClass} font-semibold mr-2 cursor-pointer hover:underline focus:underline outline-none`}
+                              style={{ ...nameStyle, whiteSpace: 'nowrap' }}
+                              title={`Open profiel van ${displayName}`}
+                            >
+                              {displayName}:
+                            </span>
+                          ) : (
+                            <span className={`${nameClass} font-semibold mr-2`} style={{ ...nameStyle, whiteSpace: 'nowrap' }}>{displayName}:</span>
+                          )}
+                        </div>
+
+                        <span className="text-slate-100 break-words" style={{ flex: '1 1 auto', minWidth: 0 }}>
+                          {message.content}
+                        </span>
+                      </div>
 
                       {canDeleteMessage && (
                         <button
