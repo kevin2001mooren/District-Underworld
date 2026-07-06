@@ -1476,7 +1476,7 @@ export default function App() {
   );
 
   // Loader screen
-  const canOpenStaffPanel = STAFF_ROLES.includes(userRole);
+  const canOpenStaffPanel = userRole === 'admin';
   const canManageRoles = userRole === 'admin';
   const canGiveCash = userRole === 'admin' || userRole === 'moderator';
   const canRecover = STAFF_ROLES.includes(userRole);
@@ -1510,7 +1510,7 @@ export default function App() {
     const role = normalizeRole(value);
     if (role === 'admin') return { color: '#d08787' };
     if (role === 'moderator') return { color: '#e3cc84' };
-    if (role === 'helper') return { color: '#8fc7df' };
+    if (role === 'helper') return { color: '#4f86a1' };
     return { color: '#d0ccc3' };
   };
 

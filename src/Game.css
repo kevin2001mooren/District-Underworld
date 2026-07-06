@@ -298,8 +298,8 @@ button:focus-visible {
 .text-amber-300 { color: #e3cc84; }
 .text-emerald-400 { color: var(--emerald); }
 .text-amber-400 { color: var(--gold); }
-.text-sky-300 { color: #8fc7df; }
-.text-sky-400 { color: #6caac7; }
+.text-sky-300 { color: #6caac7; }
+.text-sky-400 { color: #5a93af; }
 .text-red-300\/80 { color: rgba(255, 191, 191, 0.8); }
 .text-red-400 { color: #ef7676; }
 .text-red-500 { color: #de4f4f; }
