@@ -12,6 +12,8 @@ import { Shield, Skull, Zap, Swords, Coins, User, Lock, LogOut, Loader2, Award, 
 const SUPABASE_URL = "https://utqwbqymcbgoqunpjfff.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InV0cXdicXltY2Jnb3F1bnBqZmZmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMTAyMTUsImV4cCI6MjA5ODc4NjIxNX0.jirvlYKUSSmXDT-OC50zOR5TKVYEwT8NFAIFOBGhxSY";
 const APP_PUBLIC_URL = "https://district-underworld.vercel.app/";
+const DEFAULT_MALE_PROFILE_PHOTO = '/default-male-profile.jpeg';
+const DEFAULT_FEMALE_PROFILE_PHOTO = '/default-female-profile.jpeg';
 
 const getEmailRedirectUrl = () => {
   const host = window.location.hostname;
@@ -83,6 +85,8 @@ export default function App() {
   const [chatUserRoles, setChatUserRoles] = useState({});
   const [isChatWidgetOpen, setIsChatWidgetOpen] = useState(false);
   const [chatUnreadCount, setChatUnreadCount] = useState(0);
+  const [profilePhotoDraft, setProfilePhotoDraft] = useState('');
+  const [profilePhotoError, setProfilePhotoError] = useState('');
   const dashboardScrollRef = useRef(null);
   const chatScrollRef = useRef(null);
   const shouldAutoScrollChatRef = useRef(true);
@@ -279,6 +283,48 @@ export default function App() {
     const normalized = value.trim().toLowerCase();
     if (normalized === 'liever-niet-zeggen') return 'Liever niet zeggen';
     return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+  };
+
+  const getProfilePhotoStorageKey = (playerId) => `district-underworld-profile-photo-${playerId}`;
+
+  const normalizeProfilePhotoValue = (value) => {
+    const normalized = String(value || '').trim();
+    if (!normalized) return '';
+    const isHttp = /^https?:\/\//i.test(normalized);
+    const isDataImage = /^data:image\//i.test(normalized);
+    return isHttp || isDataImage ? normalized : '';
+  };
+
+  const getStoredProfilePhoto = (playerId) => {
+    if (!playerId) return '';
+    try {
+      return normalizeProfilePhotoValue(window.localStorage.getItem(getProfilePhotoStorageKey(playerId)) || '');
+    } catch (_error) {
+      return '';
+    }
+  };
+
+  const resolveProfilePhoto = (playerStats, fallbackId) => {
+    const dbPhoto = normalizeProfilePhotoValue(
+      playerStats?.profile_photo_url || playerStats?.avatar_url || playerStats?.photo_url || ''
+    );
+
+    if (dbPhoto) return dbPhoto;
+
+    const targetId = playerStats?.id || fallbackId;
+    const storedPhoto = getStoredProfilePhoto(targetId);
+    if (storedPhoto) return storedPhoto;
+
+    const genderValue = String(playerStats?.gender || '').trim().toLowerCase();
+    if (genderValue === 'vrouw' || genderValue === 'female') {
+      return DEFAULT_FEMALE_PROFILE_PHOTO;
+    }
+
+    if (genderValue === 'man' || genderValue === 'male') {
+      return DEFAULT_MALE_PROFILE_PHOTO;
+    }
+
+    return '';
   };
 
   const formatCountdown = (totalSeconds) => {
@@ -647,6 +693,89 @@ export default function App() {
       addLog("❌ Database verbindingsfout.", "error");
     } finally {
       setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!user || !stats) return;
+    const currentPhoto = resolveProfilePhoto(stats, user.id);
+    setProfilePhotoDraft(currentPhoto);
+  }, [user, stats]);
+
+  const handleProfilePhotoFileChange = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      setProfilePhotoError('Kies een geldig afbeeldingsbestand.');
+      return;
+    }
+
+    if (file.size > 1_500_000) {
+      setProfilePhotoError('Afbeelding is te groot (max 1.5 MB).');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = normalizeProfilePhotoValue(reader.result);
+      if (!dataUrl) {
+        setProfilePhotoError('Kon de afbeelding niet verwerken.');
+        return;
+      }
+      setProfilePhotoDraft(dataUrl);
+      setProfilePhotoError('');
+    };
+    reader.onerror = () => {
+      setProfilePhotoError('Uploaden mislukt. Probeer opnieuw.');
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const saveProfilePhoto = async () => {
+    if (!user || !stats) return;
+
+    const normalized = normalizeProfilePhotoValue(profilePhotoDraft);
+    if (profilePhotoDraft.trim() && !normalized) {
+      setProfilePhotoError('Gebruik een geldige afbeelding-URL (http/https) of upload een foto.');
+      return;
+    }
+
+    let savedInDatabase = false;
+
+    try {
+      const { error: dbError } = await supabase
+        .from('player_stats')
+        .update({ profile_photo_url: normalized || null })
+        .eq('id', user.id);
+
+      if (!dbError) {
+        savedInDatabase = true;
+      }
+    } catch (_error) {
+      // Fallback naar localStorage als databaseveld (nog) niet beschikbaar is.
+    }
+
+    try {
+      const key = getProfilePhotoStorageKey(user.id);
+      if (normalized) {
+        window.localStorage.setItem(key, normalized);
+      } else {
+        window.localStorage.removeItem(key);
+      }
+    } catch (_error) {
+      // Lokale opslag kan falen in private mode; UI blijft wel werken in-memory.
+    }
+
+    setStats((prev) => {
+      if (!prev) return prev;
+      return { ...prev, profile_photo_url: normalized || null };
+    });
+    setProfilePhotoError('');
+    if (savedInDatabase) {
+      showActionNotice('Profielfoto opgeslagen en gesynchroniseerd.', 'success');
+    } else {
+      showActionNotice('Profielfoto lokaal opgeslagen op dit apparaat.', 'info');
     }
   };
 
@@ -1762,35 +1891,79 @@ export default function App() {
   const renderHeaderPlayerInfo = () => {
     if (!stats) return null;
 
-    const energyTimerText =
-      (stats?.energy || 0) >= (stats?.max_energy || 100)
-        ? 'Energie vol'
-        : `+1 Energie in ${formatCountdown(recoveryTimers.energy)}`;
+    const energyCurrent = Number(stats?.energy) || 0;
+    const energyMax = Number(stats?.max_energy) || 100;
+    const nerveCurrent = Number(stats?.nerve) || 0;
+    const nerveMax = Number(stats?.max_nerve) || 20;
+    const xpCurrent = Number(stats?.xp) || 0;
+    const xpNext = (Number(stats?.level) || 1) * 100;
 
-    const nerveTimerText =
-      (stats?.nerve || 0) >= (stats?.max_nerve || 20)
-        ? 'Lef vol'
-        : `+1 Lef in ${formatCountdown(recoveryTimers.nerve)}`;
+    const energyPercent = Math.max(0, Math.min(100, (energyCurrent / energyMax) * 100));
+    const nervePercent = Math.max(0, Math.min(100, (nerveCurrent / nerveMax) * 100));
+    const xpPercent = Math.max(0, Math.min(100, (xpCurrent / xpNext) * 100));
+
+    const energyTimerText = energyCurrent >= energyMax ? 'VOL' : formatCountdown(recoveryTimers.energy);
+    const nerveTimerText = nerveCurrent >= nerveMax ? 'VOL' : formatCountdown(recoveryTimers.nerve);
+    const profilePhoto = resolveProfilePhoto(stats, user?.id);
+    const usernameLabel = stats?.username ? formatDisplayUsername(stats.username) : 'Onbekend';
+    const usernameInitial = usernameLabel.charAt(0).toUpperCase() || '?';
 
     return (
-            <>
-        <div>
-          <div className="flex items-center gap-2 mb-0.5">
-            <Skull className="h-6 w-6 text-rose-500" />
-            <p className="text-lg text-slate-100 font-extrabold uppercase tracking-wide leading-none">District Underworld</p>
+      <div style={{ minWidth: '280px', maxWidth: '430px' }}>
+        <div className="rounded-xl border p-2.5" style={{ background: 'linear-gradient(135deg, #1b2230 0%, #0f172a 100%)', borderColor: '#364154', boxShadow: '0 8px 18px rgba(2, 6, 23, 0.3)' }}>
+          <div className="flex items-center gap-2.5">
+            <div
+              className="rounded-xl border overflow-hidden flex-shrink-0"
+              style={{ width: '82px', height: '82px', borderColor: '#475569', background: '#0b1220' }}
+              title="Profielfoto"
+            >
+              {profilePhoto ? (
+                <img src={profilePhoto} alt={`Profiel van ${usernameLabel}`} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center text-base font-black text-slate-300">{usernameInitial}</div>
+              )}
+            </div>
+
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-black leading-tight truncate" style={roleNameColorStyle(userRole)}>{usernameLabel}</p>
+              <p className="text-xs mt-0.5 leading-tight text-slate-400">LVL {stats?.level || 1}</p>
+              <p className="text-xs text-emerald-400 font-mono mt-0.5 leading-tight">${stats?.cash?.toLocaleString() || 0}</p>
+            </div>
           </div>
-          <h1 className="text-base font-bold leading-tight" style={roleNameColorStyle(userRole)}>{stats?.username ? formatDisplayUsername(stats.username) : 'Onbekend'}</h1>
-          <p className={`text-xs mt-0.5 ${roleColorClass(userRole)}`}>
-            {roleLabel(userRole)}
-          </p>
-          <p className="text-[10px] text-slate-400 font-mono">
-            Level {stats?.level || 1} • ${stats?.cash?.toLocaleString() || 0} • Energie {stats?.energy || 0}/{stats?.max_energy || 100} • Lef {stats?.nerve || 0}/{stats?.max_nerve || 20}
-          </p>
-          <p className="text-[10px] text-slate-500 font-mono mt-0.5">
-            {energyTimerText} • {nerveTimerText}
-          </p>
+
+          <div className="mt-2" style={{ display: 'grid', gap: '4px' }}>
+            <div>
+              <div className="flex justify-between items-center text-xs uppercase tracking-wide text-slate-300 leading-tight">
+                <span>Energy</span>
+                <span className="font-mono text-slate-400 text-xs">{energyCurrent}/{energyMax} • {energyTimerText}</span>
+              </div>
+              <div className="w-full rounded-sm mt-0.5 overflow-hidden" style={{ height: '6px', background: '#111827', border: '1px solid #374151' }}>
+                <div style={{ height: '100%', width: `${energyPercent}%`, background: 'linear-gradient(90deg, #facc15, #f97316)' }} />
+              </div>
+            </div>
+
+            <div>
+              <div className="flex justify-between items-center text-xs uppercase tracking-wide text-slate-300 leading-tight">
+                <span>Nerve</span>
+                <span className="font-mono text-slate-400 text-xs">{nerveCurrent}/{nerveMax} • {nerveTimerText}</span>
+              </div>
+              <div className="w-full rounded-sm mt-0.5 overflow-hidden" style={{ height: '6px', background: '#111827', border: '1px solid #374151' }}>
+                <div style={{ height: '100%', width: `${nervePercent}%`, background: 'linear-gradient(90deg, #fb7185, #ef4444)' }} />
+              </div>
+            </div>
+
+            <div>
+              <div className="flex justify-between items-center text-xs uppercase tracking-wide text-slate-300 leading-tight">
+                <span>Experience</span>
+                <span className="font-mono text-slate-400 text-xs">{xpCurrent}/{xpNext}</span>
+              </div>
+              <div className="w-full rounded-sm mt-0.5 overflow-hidden" style={{ height: '6px', background: '#111827', border: '1px solid #374151' }}>
+                <div style={{ height: '100%', width: `${xpPercent}%`, background: 'linear-gradient(90deg, #22d3ee, #3b82f6)' }} />
+              </div>
+            </div>
+          </div>
         </div>
-      </>
+      </div>
     );
   };
 
@@ -2169,6 +2342,69 @@ export default function App() {
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl max-w-2xl mx-auto">
             <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-4">👤 Mijn profiel</h3>
             <div className="bg-slate-950 border border-slate-850 rounded-xl p-4 space-y-2.5 text-sm">
+              <div className="flex flex-col sm:flex-row gap-4 sm:items-center sm:justify-between border-b border-slate-800 pb-4 mb-3">
+                <div className="flex items-center gap-3">
+                  <div className="rounded-xl border border-slate-700 overflow-hidden" style={{ width: '72px', height: '72px', background: '#0b1220' }}>
+                    {resolveProfilePhoto(stats, user?.id) ? (
+                      <img
+                        src={resolveProfilePhoto(stats, user?.id)}
+                        alt={`Profiel van ${stats?.username || 'speler'}`}
+                        style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                      />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center text-2xl font-black text-slate-300">
+                        {(stats?.username ? formatDisplayUsername(stats.username) : 'O').charAt(0).toUpperCase()}
+                      </div>
+                    )}
+                  </div>
+                  <div>
+                    <p className="text-xs text-slate-400 uppercase tracking-wider">Profielfoto</p>
+                    <p className="text-[11px] text-slate-500 mt-1">Gebruik een URL of upload direct een afbeelding.</p>
+                  </div>
+                </div>
+
+                <div className="w-full sm:w-auto sm:min-w-[320px] space-y-2">
+                  <input
+                    type="url"
+                    value={profilePhotoDraft}
+                    onChange={(e) => {
+                      setProfilePhotoDraft(e.target.value);
+                      setProfilePhotoError('');
+                    }}
+                    placeholder="https://.../jouw-foto.jpg"
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-rose-500 transition"
+                  />
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={handleProfilePhotoFileChange}
+                      className="block w-full text-[11px] text-slate-400 file:mr-2 file:rounded-md file:border file:border-slate-700 file:bg-slate-900 file:px-2 file:py-1 file:text-[11px] file:text-slate-300"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setProfilePhotoDraft('');
+                        setProfilePhotoError('');
+                      }}
+                      className="px-2 py-1 text-xs rounded-md border border-slate-700 text-slate-300 hover:bg-slate-800"
+                    >
+                      Reset
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void saveProfilePhoto();
+                      }}
+                      className="px-2 py-1 text-xs rounded-md border border-emerald-700 text-emerald-300 hover:bg-emerald-950/30"
+                    >
+                      Opslaan
+                    </button>
+                  </div>
+                  {profilePhotoError && <p className="text-[11px] text-red-300">{profilePhotoError}</p>}
+                </div>
+              </div>
+
               <p className="text-slate-300"><span className="text-slate-500">Gebruikersnaam:</span> <span style={roleNameColorStyle(userRole)}>{stats?.username ? formatDisplayUsername(stats.username) : 'Onbekend'}</span></p>
               <p className="text-slate-300"><span className="text-slate-500">Rol:</span> <span className={roleColorClass(userRole)}>{roleLabel(userRole)}</span></p>
               <p className="text-slate-300"><span className="text-slate-500">E-mail:</span> {user?.email || email || 'Onbekend'}</p>
@@ -2424,6 +2660,9 @@ export default function App() {
   }
 
   if (currentView === 'member-profile' && selectedMemberProfile) {
+    const selectedMemberPhoto = resolveProfilePhoto(selectedMemberProfile, selectedMemberProfile?.id);
+    const selectedMemberName = formatDisplayUsername(selectedMemberProfile.username || 'Onbekend');
+
     return (
       <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
         <header className="bg-slate-900 border-b border-slate-800 py-4 px-6 flex flex-wrap justify-between items-center gap-4">
@@ -2461,9 +2700,29 @@ export default function App() {
 
         <main className="flex-grow p-6">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl max-w-2xl mx-auto">
-            <h3 className="text-xs font-bold uppercase tracking-wider mb-4" style={roleNameColorStyle(selectedMemberProfile.role)}>👤 {formatDisplayUsername(selectedMemberProfile.username || 'Onbekend')}</h3>
+            <h3 className="text-xs font-bold uppercase tracking-wider mb-4" style={roleNameColorStyle(selectedMemberProfile.role)}>👤 {selectedMemberName}</h3>
             <div className="bg-slate-950 border border-slate-850 rounded-xl p-4 space-y-2.5 text-sm">
-              <p className="text-slate-300"><span className="text-slate-500">Gebruikersnaam:</span> <span style={roleNameColorStyle(selectedMemberProfile.role)}>{formatDisplayUsername(selectedMemberProfile.username || 'Onbekend')}</span></p>
+              <div className="flex items-center gap-3 border-b border-slate-800 pb-4 mb-3">
+                <div className="rounded-xl border border-slate-700 overflow-hidden" style={{ width: '72px', height: '72px', background: '#0b1220' }}>
+                  {selectedMemberPhoto ? (
+                    <img
+                      src={selectedMemberPhoto}
+                      alt={`Profiel van ${selectedMemberName}`}
+                      style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                    />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center text-2xl font-black text-slate-300">
+                      {selectedMemberName.charAt(0).toUpperCase()}
+                    </div>
+                  )}
+                </div>
+                <div>
+                  <p className="text-xs text-slate-400 uppercase tracking-wider">Profielfoto</p>
+                  <p className="text-[11px] text-slate-500 mt-1">Openbaar profielbeeld van deze speler.</p>
+                </div>
+              </div>
+
+              <p className="text-slate-300"><span className="text-slate-500">Gebruikersnaam:</span> <span style={roleNameColorStyle(selectedMemberProfile.role)}>{selectedMemberName}</span></p>
               <p className="text-slate-300"><span className="text-slate-500">Rol:</span> <span className={roleColorClass(selectedMemberProfile.role)}>{roleLabel(selectedMemberProfile.role)}</span></p>
               <p className="text-slate-300"><span className="text-slate-500">Gender:</span> {formatGenderLabel(selectedMemberProfile.gender)}</p>
               <p className="text-slate-300"><span className="text-slate-500">Level:</span> {selectedMemberProfile.level || 1}</p>
