@@ -2723,10 +2723,6 @@ export default function App() {
                     </div>
                   )}
                 </div>
-                <div>
-                  <p className="text-xs text-slate-400 uppercase tracking-wider">Profielfoto</p>
-                  <p className="text-[11px] text-slate-500 mt-1">Openbaar profielbeeld van deze speler.</p>
-                </div>
               </div>
 
               <p className="text-slate-300"><span className="text-slate-500">Gebruikersnaam:</span> <span style={roleNameColorStyle(selectedMemberProfile.role)}>{selectedMemberName}</span></p>
