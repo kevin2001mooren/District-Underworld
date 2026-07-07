@@ -1895,12 +1895,12 @@ export default function App() {
     const energyMax = Number(stats?.max_energy) || 100;
     const nerveCurrent = Number(stats?.nerve) || 0;
     const nerveMax = Number(stats?.max_nerve) || 20;
-    const xpCurrent = Number(stats?.xp) || 0;
-    const xpNext = (Number(stats?.level) || 1) * 100;
+    const lifeCurrent = Number(stats?.life ?? stats?.hp) || 100;
+    const lifeMax = Number(stats?.max_life ?? stats?.max_hp) || 100;
 
     const energyPercent = Math.max(0, Math.min(100, (energyCurrent / energyMax) * 100));
     const nervePercent = Math.max(0, Math.min(100, (nerveCurrent / nerveMax) * 100));
-    const xpPercent = Math.max(0, Math.min(100, (xpCurrent / xpNext) * 100));
+    const lifePercent = Math.max(0, Math.min(100, (lifeCurrent / lifeMax) * 100));
 
     const energyTimerText = energyCurrent >= energyMax ? 'VOL' : formatCountdown(recoveryTimers.energy);
     const nerveTimerText = nerveCurrent >= nerveMax ? 'VOL' : formatCountdown(recoveryTimers.nerve);
@@ -1910,11 +1910,18 @@ export default function App() {
 
     return (
       <div style={{ minWidth: '280px', maxWidth: '430px' }}>
-        <div className="rounded-xl border p-2.5" style={{ background: 'linear-gradient(135deg, #1b2230 0%, #0f172a 100%)', borderColor: '#364154', boxShadow: '0 8px 18px rgba(2, 6, 23, 0.3)' }}>
-          <div className="flex items-center gap-2.5">
+        <div
+          className="rounded-xl border p-3"
+          style={{
+            background: 'radial-gradient(circle at 88% 12%, rgba(244, 63, 94, 0.14) 0%, rgba(244, 63, 94, 0) 42%), linear-gradient(180deg, #0b0f16 0%, #070b12 100%)',
+            borderColor: '#2a3342',
+            boxShadow: '0 10px 24px rgba(2, 6, 23, 0.42), inset 0 1px rgba(255,255,255,0.03)'
+          }}
+        >
+          <div className="flex items-center gap-4">
             <div
               className="rounded-xl border overflow-hidden flex-shrink-0"
-              style={{ width: '82px', height: '82px', borderColor: '#475569', background: '#0b1220' }}
+              style={{ width: '112px', height: '112px', borderColor: '#475569', background: '#0b1220' }}
               title="Profielfoto"
             >
               {profilePhoto ? (
@@ -1925,13 +1932,13 @@ export default function App() {
             </div>
 
             <div className="min-w-0 flex-1">
-              <p className="text-xs font-black leading-tight truncate" style={roleNameColorStyle(userRole)}>{usernameLabel}</p>
+              <p className="text-lg font-black leading-tight truncate" style={roleNameColorStyle(userRole)}>{usernameLabel}</p>
               <p className="text-xs mt-0.5 leading-tight text-slate-400">LVL {stats?.level || 1}</p>
               <p className="text-xs text-emerald-400 font-mono mt-0.5 leading-tight">${stats?.cash?.toLocaleString() || 0}</p>
             </div>
           </div>
 
-          <div className="mt-2" style={{ display: 'grid', gap: '4px' }}>
+          <div className="mt-2 px-2 pb-2" style={{ display: 'grid', gap: '4px' }}>
             <div>
               <div className="flex justify-between items-center text-xs uppercase tracking-wide text-slate-300 leading-tight">
                 <span>Energy</span>
@@ -1954,11 +1961,11 @@ export default function App() {
 
             <div>
               <div className="flex justify-between items-center text-xs uppercase tracking-wide text-slate-300 leading-tight">
-                <span>Experience</span>
-                <span className="font-mono text-slate-400 text-xs">{xpCurrent}/{xpNext}</span>
+                <span>Life</span>
+                <span className="font-mono text-slate-400 text-xs">{lifeCurrent}/{lifeMax}</span>
               </div>
               <div className="w-full rounded-sm mt-0.5 overflow-hidden" style={{ height: '6px', background: '#111827', border: '1px solid #374151' }}>
-                <div style={{ height: '100%', width: `${xpPercent}%`, background: 'linear-gradient(90deg, #22d3ee, #3b82f6)' }} />
+                <div style={{ height: '100%', width: `${lifePercent}%`, background: 'linear-gradient(90deg, #22c55e, #16a34a)' }} />
               </div>
             </div>
           </div>
