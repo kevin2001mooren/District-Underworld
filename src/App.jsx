@@ -1921,7 +1921,7 @@ export default function App() {
           <div className="flex items-center gap-4">
             <div
               className="rounded-xl border overflow-hidden flex-shrink-0"
-              style={{ width: '112px', height: '112px', borderColor: '#475569', background: '#0b1220' }}
+              style={{ width: '80px', height: '80px', borderColor: '#475569', background: '#0b1220' }}
               title="Profielfoto"
             >
               {profilePhoto ? (
