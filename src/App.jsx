@@ -1,8 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import './Game.css';
-// We importen Supabase nu direct via een universele ESM CDN om bundler-fouten in de preview te voorkomen
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { createClient } from '@supabase/supabase-js';
 import { Shield, Skull, Zap, Swords, Coins, User, Lock, LogOut, Loader2, Award, Clock } from 'lucide-react';
 
 // =========================================================
