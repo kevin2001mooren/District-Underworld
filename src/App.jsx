@@ -817,10 +817,33 @@ export default function App() {
 
   // Sync current state to Supabase on actions
   const updateDB = async (updatedFields) => {
+    if (!user?.id) {
+      addLog('🚨 Synchronisatie overgeslagen: geen actieve sessie.', 'error');
+      return false;
+    }
+
+    const clampInt = (value, min = 0, max = Number.MAX_SAFE_INTEGER) => {
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed)) return min;
+      const rounded = Math.round(parsed);
+      return Math.max(min, Math.min(max, rounded));
+    };
+
     const payload = {
       ...updatedFields,
       last_updated: new Date().toISOString()
     };
+
+    // Bescherm tegen out-of-range/float issues op integer kolommen.
+    if (Object.prototype.hasOwnProperty.call(payload, 'cash')) {
+      payload.cash = clampInt(payload.cash, 0, CASH_INTEGER_MAX);
+    }
+
+    ['energy', 'max_energy', 'nerve', 'max_nerve', 'xp', 'level', 'strength', 'life', 'max_life', 'hp', 'max_hp']
+      .forEach((key) => {
+        if (!Object.prototype.hasOwnProperty.call(payload, key)) return;
+        payload[key] = clampInt(payload[key], 0);
+      });
 
     setStats(prev => ({ ...prev, ...payload }));
 
@@ -830,8 +853,12 @@ export default function App() {
       .eq('id', user.id);
 
     if (error) {
-      addLog("🚨 Synchronisatie met cloud database mislukt!", "error");
+      const parts = [error.code, error.message, error.details, error.hint].filter(Boolean);
+      addLog(`🚨 Synchronisatie met cloud database mislukt: ${parts.join(' | ')}`, 'error');
+      return false;
     }
+
+    return true;
   };
 
   // ==========================================
