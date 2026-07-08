@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import './Game.css';
 import { createClient } from '@supabase/supabase-js';
-import { Shield, Skull, Zap, Swords, Coins, User, Lock, LogOut, Loader2, Award, Clock } from 'lucide-react';
+import { Shield, Skull, Zap, Swords, Coins, User, Lock, Loader2, Award, Clock } from 'lucide-react';
 
 // =========================================================
 // ⚠️ VERVANG DEZE TWEE CODES HIERONDER MET JOUW EIGEN KEYS!
@@ -2410,13 +2410,6 @@ export default function App() {
             >
               Online leden
             </button>
-            <button
-              onClick={handleLogout}
-              className="p-2 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition"
-              title="Log uit"
-            >
-              <LogOut className="h-4 w-4" />
-            </button>
           </div>
         </header>
 
@@ -2517,13 +2510,6 @@ export default function App() {
               title="Toon online leden"
             >
               Online leden
-            </button>
-            <button
-              onClick={handleLogout}
-              className="p-2 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition"
-              title="Log uit"
-            >
-              <LogOut className="h-4 w-4" />
             </button>
           </div>
         </header>
@@ -2693,13 +2679,6 @@ export default function App() {
             >
               Online leden
             </button>
-            <button
-              onClick={handleLogout}
-              className="p-2 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition"
-              title="Log uit"
-            >
-              <LogOut className="h-4 w-4" />
-            </button>
           </div>
         </header>
 
@@ -2773,13 +2752,6 @@ export default function App() {
             >
               Online leden
             </button>
-            <button
-              onClick={handleLogout}
-              className="p-2 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition"
-              title="Log uit"
-            >
-              <LogOut className="h-4 w-4" />
-            </button>
           </div>
         </header>
 
@@ -2848,13 +2820,6 @@ export default function App() {
               title="Toon online leden"
             >
               Online leden
-            </button>
-            <button
-              onClick={handleLogout}
-              className="p-2 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition"
-              title="Log uit"
-            >
-              <LogOut className="h-4 w-4" />
             </button>
           </div>
         </header>
@@ -2948,13 +2913,6 @@ export default function App() {
             >
               Online leden
             </button>
-            <button
-              onClick={handleLogout}
-              className="p-2 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition"
-              title="Log uit"
-            >
-              <LogOut className="h-4 w-4" />
-            </button>
           </div>
         </header>
 
@@ -3031,13 +2989,6 @@ export default function App() {
               title="Toon online leden"
             >
               Online leden
-            </button>
-            <button
-              onClick={handleLogout}
-              className="p-2 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition"
-              title="Log uit"
-            >
-              <LogOut className="h-4 w-4" />
             </button>
           </div>
         </header>
@@ -3173,13 +3124,6 @@ export default function App() {
             title="Toon online leden"
           >
             Online leden
-          </button>
-          <button 
-            onClick={handleLogout}
-            className="p-2 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition"
-            title="Log uit"
-          >
-            <LogOut className="h-4 w-4" />
           </button>
         </div>
       </header>
