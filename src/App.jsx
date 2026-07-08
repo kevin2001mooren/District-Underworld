@@ -1868,6 +1868,57 @@ export default function App() {
     </div>
   );
 
+  const renderLeftUtilityMenu = () => {
+    if (!user) return null;
+
+    return (
+      <aside className="left-utility-menu" aria-label="Snelle navigatie">
+        <div className="left-utility-title">Algemeen</div>
+        <button
+          type="button"
+          className="left-utility-item"
+          onClick={() => {
+            addLog('🆘 Helpdesk knop ingedrukt.');
+            showActionNotice('Helpdesk geopend. Stel je vraag in de live chat.', 'info');
+          }}
+        >
+          Helpdesk
+        </button>
+        <button
+          type="button"
+          className="left-utility-item"
+          onClick={() => {
+            setCityMenuOpen(false);
+            setCurrentView('game');
+            addLog('ℹ️ instellingen knop ingedrukt.');
+          }}
+        >
+          Instellingen
+        </button>
+        <button
+          type="button"
+          className="left-utility-item"
+          onClick={() => {
+            setCityMenuOpen(false);
+            setActiveTab('overzicht');
+            setCurrentView('game');
+            scrollDashboardToTop();
+            addLog('ℹ️ Informatie knop ingedrukt.');
+          }}
+        >
+          Informatie
+        </button>
+        <button
+          type="button"
+          className="left-utility-item"
+          onClick={handleLogout}
+        >
+          Uitloggen
+        </button>
+      </aside>
+    );
+  };
+
   // Loader screen
   const canOpenStaffPanel = userRole === 'admin';
   const canManageRoles = userRole === 'admin';
@@ -2338,7 +2389,7 @@ export default function App() {
 
   if (currentView === 'profile') {
     return (
-      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans app-with-left-utility">
         <header className="bg-slate-900 border-b border-slate-800 py-4 px-6 flex flex-wrap justify-between items-center gap-4">
           <div className="flex items-center gap-3">
             {renderHeaderPlayerInfo()}
@@ -2447,6 +2498,7 @@ export default function App() {
             </div>
           </div>
         </main>
+        {renderLeftUtilityMenu()}
         {renderLiveChatWidget()}
       </div>
     );
@@ -2454,7 +2506,7 @@ export default function App() {
 
   if (currentView === 'admin' && canOpenStaffPanel) {
     return (
-      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans app-with-left-utility">
         <header className="bg-slate-900 border-b border-slate-800 py-4 px-6 flex flex-wrap justify-between items-center gap-4">
           <div className="flex items-center gap-3">
             {renderHeaderPlayerInfo()}
@@ -2612,6 +2664,7 @@ export default function App() {
             )}
           </div>
         </main>
+        {renderLeftUtilityMenu()}
         {renderLiveChatWidget()}
       </div>
     );
@@ -2619,7 +2672,7 @@ export default function App() {
 
   if (currentView === 'online-members') {
     return (
-      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans app-with-left-utility">
         <header className="bg-slate-900 border-b border-slate-800 py-4 px-6 flex flex-wrap justify-between items-center gap-4">
           <div className="flex items-center gap-3">
             {renderHeaderPlayerInfo()}
@@ -2688,6 +2741,7 @@ export default function App() {
             )}
           </div>
         </main>
+        {renderLeftUtilityMenu()}
         {renderLiveChatWidget()}
       </div>
     );
@@ -2698,7 +2752,7 @@ export default function App() {
     const selectedMemberName = formatDisplayUsername(selectedMemberProfile.username || 'Onbekend');
 
     return (
-      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans app-with-left-utility">
         <header className="bg-slate-900 border-b border-slate-800 py-4 px-6 flex flex-wrap justify-between items-center gap-4">
           <div className="flex items-center gap-3">
             {renderHeaderPlayerInfo()}
@@ -2759,6 +2813,7 @@ export default function App() {
             </div>
           </div>
         </main>
+        {renderLeftUtilityMenu()}
         {renderLiveChatWidget()}
       </div>
     );
@@ -2766,7 +2821,7 @@ export default function App() {
 
   if (currentView === 'crime') {
     return (
-      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans app-with-left-utility">
         <header className="bg-slate-900 border-b border-slate-800 py-4 px-6 flex flex-wrap justify-between items-center gap-4">
           <div className="flex items-center gap-3">
             {renderHeaderPlayerInfo()}
@@ -2857,6 +2912,7 @@ export default function App() {
             </div>
           </div>
         </main>
+        {renderLeftUtilityMenu()}
         {renderLiveChatWidget()}
       </div>
     );
@@ -2864,7 +2920,7 @@ export default function App() {
 
   if (currentView === 'sports') {
     return (
-      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans app-with-left-utility">
         <header className="bg-slate-900 border-b border-slate-800 py-4 px-6 flex flex-wrap justify-between items-center gap-4">
           <div className="flex items-center gap-3">
             {renderHeaderPlayerInfo()}
@@ -2938,6 +2994,7 @@ export default function App() {
             </button>
           </div>
         </main>
+        {renderLeftUtilityMenu()}
         {renderLiveChatWidget()}
       </div>
     );
@@ -2947,7 +3004,7 @@ export default function App() {
     const rescueTargets = prisonMembers.filter((member) => member.id !== user?.id && getRemainingJailSeconds(member.jail_until) > 0);
 
     return (
-      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans app-with-left-utility">
         <header className="bg-slate-900 border-b border-slate-800 py-4 px-6 flex flex-wrap justify-between items-center gap-4">
           <div className="flex items-center gap-3">
             {renderHeaderPlayerInfo()}
@@ -3080,6 +3137,7 @@ export default function App() {
             </div>
           </div>
         </main>
+        {renderLeftUtilityMenu()}
         {renderLiveChatWidget()}
       </div>
     );
@@ -3087,7 +3145,7 @@ export default function App() {
 
   // Active Game Dashboard
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans app-with-left-utility">
       {/* HEADER */}
       <header className="bg-slate-900 border-b border-slate-800 py-4 px-6 flex flex-wrap justify-between items-center gap-4">
         <div className="flex items-center gap-3">
@@ -3252,6 +3310,7 @@ export default function App() {
 
         </section>
       </main>
+      {renderLeftUtilityMenu()}
       {renderLiveChatWidget()}
     </div>
   );
