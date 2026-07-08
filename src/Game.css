@@ -202,7 +202,7 @@ button:focus-visible {
 	border-top: 1px solid rgba(255, 255, 255, 0.03);
 	border-bottom: 1px solid rgba(0, 0, 0, 0.55);
 	color: #d0ccc3;
-	font-size: 11px;
+	font-size: 15px;
 	line-height: 1.15;
 	text-align: left;
 	font-weight: 600;
