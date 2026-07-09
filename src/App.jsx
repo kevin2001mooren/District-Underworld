@@ -37,15 +37,15 @@ const CHAT_FONT_SIZE_PX = 12;
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const NAV_TABS = ['overzicht', 'mijn items', 'woning', 'stad', 'misdaad', 'sporten', 'reizen'];
-const MEMBER_SELECT_VARIANTS = [
-  'id, username, level, role, gender, cash, strength, xp, last_updated, jail_until, profile_photo_url, avatar_url, photo_url',
-  'id, username, level, role, gender, cash, strength, xp, last_updated, jail_until, avatar_url, photo_url',
-  'id, username, level, role, gender, cash, strength, xp, last_updated, jail_until, photo_url',
-  'id, username, level, role, gender, cash, strength, xp, last_updated, jail_until',
-  'id, username, level, gender, cash, strength, xp, last_updated, jail_until, profile_photo_url, avatar_url, photo_url',
-  'id, username, level, gender, cash, strength, xp, last_updated, jail_until, avatar_url, photo_url',
-  'id, username, level, gender, cash, strength, xp, last_updated, jail_until, photo_url',
-  'id, username, level, gender, cash, strength, xp, last_updated, jail_until'
+const PROFILE_PHOTO_FIELD_CANDIDATES = [
+  'profile_photo_url',
+  'avatar_url',
+  'photo_url',
+  'avatar',
+  'profile_photo',
+  'profile_image_url',
+  'image_url',
+  'photo'
 ];
 
 export default function App() {
@@ -101,7 +101,6 @@ export default function App() {
   const [usernameDraft, setUsernameDraft] = useState('');
   const [usernameChangeError, setUsernameChangeError] = useState('');
   const [usernameChangeLoading, setUsernameChangeLoading] = useState(false);
-  const membersSelectVariantRef = useRef(0);
   const dashboardScrollRef = useRef(null);
   const chatScrollRef = useRef(null);
   const shouldAutoScrollChatRef = useRef(true);
@@ -275,34 +274,20 @@ export default function App() {
 
         while (true) {
           const to = from + pageSize - 1;
-          let batch = null;
-          let lastError = null;
-          const variantCount = MEMBER_SELECT_VARIANTS.length;
+          const { data, error } = await supabase
+            .from('player_stats')
+            .select('*')
+            .order('username', { ascending: true })
+            .range(from, to);
 
-          for (let attempt = 0; attempt < variantCount; attempt += 1) {
-            const variantIndex = (membersSelectVariantRef.current + attempt) % variantCount;
-            const { data, error } = await supabase
-              .from('player_stats')
-              .select(MEMBER_SELECT_VARIANTS[variantIndex])
-              .order('username', { ascending: true })
-              .range(from, to);
-
-            if (error) {
-              lastError = error;
-              continue;
-            }
-
-            membersSelectVariantRef.current = variantIndex;
-            batch = (data || []).map((member) => ({
-              ...member,
-              role: normalizeRole(member?.role)
-            }));
-            break;
+          if (error) {
+            throw error;
           }
 
-          if (!batch) {
-            throw lastError || new Error('Onbekende fout tijdens ophalen van leden.');
-          }
+          const batch = (data || []).map((member) => ({
+            ...member,
+            role: normalizeRole(member?.role)
+          }));
 
           allMembers = [...allMembers, ...batch];
 
@@ -379,9 +364,9 @@ export default function App() {
   };
 
   const resolveProfilePhoto = (playerStats, fallbackId) => {
-    const dbPhoto = normalizeProfilePhotoValue(
-      playerStats?.profile_photo_url || playerStats?.avatar_url || playerStats?.photo_url || ''
-    );
+    const dbPhoto = PROFILE_PHOTO_FIELD_CANDIDATES
+      .map((field) => normalizeProfilePhotoValue(playerStats?.[field]))
+      .find(Boolean) || '';
 
     if (dbPhoto) return dbPhoto;
 
@@ -635,26 +620,14 @@ export default function App() {
     );
 
     const fetchMemberProfileById = async (memberId) => {
-      const variantCount = MEMBER_SELECT_VARIANTS.length;
+      const { data, error } = await supabase
+        .from('player_stats')
+        .select('*')
+        .eq('id', memberId)
+        .maybeSingle();
 
-      for (let attempt = 0; attempt < variantCount; attempt += 1) {
-        const variantIndex = (membersSelectVariantRef.current + attempt) % variantCount;
-        const { data, error } = await supabase
-          .from('player_stats')
-          .select(MEMBER_SELECT_VARIANTS[variantIndex])
-          .eq('id', memberId)
-          .maybeSingle();
-
-        if (error) {
-          continue;
-        }
-
-        membersSelectVariantRef.current = variantIndex;
-        if (!data) return null;
-        return { ...data, role: normalizeRole(data?.role) };
-      }
-
-      return null;
+      if (error || !data) return null;
+      return { ...data, role: normalizeRole(data?.role) };
     };
 
     const openMemberProfile = async (memberData) => {
@@ -859,16 +832,14 @@ export default function App() {
     }
 
     let savedInDatabase = false;
+    let savedPhotoField = null;
 
     try {
-      const updatePayloads = [
-        { profile_photo_url: normalized || null },
-        { avatar_url: normalized || null },
-        { photo_url: normalized || null }
-      ];
+      const existingFields = PROFILE_PHOTO_FIELD_CANDIDATES.filter((field) => Object.prototype.hasOwnProperty.call(stats, field));
+      const fieldsToTry = Array.from(new Set([...existingFields, ...PROFILE_PHOTO_FIELD_CANDIDATES]));
 
-      for (const payload of updatePayloads) {
-        const payloadKey = Object.keys(payload)[0];
+      for (const fieldName of fieldsToTry) {
+        const payload = { [fieldName]: normalized || null };
         const { error: dbError } = await supabase
           .from('player_stats')
           .update(payload)
@@ -876,10 +847,11 @@ export default function App() {
 
         if (!dbError) {
           savedInDatabase = true;
+          savedPhotoField = fieldName;
           break;
         }
 
-        if (!isMissingPlayerStatsColumnError(dbError, payloadKey)) {
+        if (!isMissingPlayerStatsColumnError(dbError, fieldName)) {
           addLog(`⚠️ Profielfoto cloud-opslag mislukt: ${dbError.message}`, 'error');
           break;
         }
@@ -901,7 +873,16 @@ export default function App() {
 
     setStats((prev) => {
       if (!prev) return prev;
-      return { ...prev, profile_photo_url: normalized || null };
+      const next = { ...prev };
+      if (savedPhotoField) {
+        next[savedPhotoField] = normalized || null;
+      } else {
+        PROFILE_PHOTO_FIELD_CANDIDATES.forEach((field) => {
+          if (!Object.prototype.hasOwnProperty.call(next, field)) return;
+          next[field] = normalized || null;
+        });
+      }
+      return next;
     });
     setProfilePhotoError('');
     if (savedInDatabase) {
@@ -2971,25 +2952,11 @@ export default function App() {
                     key={member.id}
                     onClick={async () => {
                       try {
-                        const variantCount = MEMBER_SELECT_VARIANTS.length;
-                        let profileData = null;
-
-                        for (let attempt = 0; attempt < variantCount; attempt += 1) {
-                          const variantIndex = (membersSelectVariantRef.current + attempt) % variantCount;
-                          const { data, error } = await supabase
-                            .from('player_stats')
-                            .select(MEMBER_SELECT_VARIANTS[variantIndex])
-                            .eq('id', member.id)
-                            .maybeSingle();
-
-                          if (error) {
-                            continue;
-                          }
-
-                          membersSelectVariantRef.current = variantIndex;
-                          profileData = data;
-                          break;
-                        }
+                        const { data: profileData } = await supabase
+                          .from('player_stats')
+                          .select('*')
+                          .eq('id', member.id)
+                          .maybeSingle();
 
                         setSelectedMemberProfile(profileData ? { ...profileData, role: normalizeRole(profileData?.role) } : member);
                       } catch (_error) {
