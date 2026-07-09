@@ -507,7 +507,43 @@ button[class*='bg-slate-850']:active {
 	.p-6 { padding: 1rem; }
 	.text-2xl { font-size: 1.35rem; }
 	h1 { font-size: 1.15rem; }
+
 	.left-utility-menu {
+		display: grid;
+		grid-template-columns: repeat(4, minmax(0, 1fr));
+		position: fixed;
+		left: 10px;
+		right: 10px;
+		bottom: 10px;
+		top: auto;
+		width: auto;
+		z-index: 400;
+		border-radius: 0.9rem;
+		border: 1px solid #3b3b3b;
+		background: linear-gradient(180deg, #181818 0%, #111111 100%);
+		overflow: hidden;
+	}
+
+	.left-utility-title {
 		display: none;
+	}
+
+	.left-utility-item {
+		padding: 0.62rem 0.3rem;
+		font-size: 12px;
+		text-align: center;
+		font-weight: 700;
+		border-top: 0;
+		border-bottom: 0;
+		border-right: 1px solid rgba(255, 255, 255, 0.08);
+		line-height: 1.1;
+	}
+
+	.left-utility-item:last-child {
+		border-right: 0;
+	}
+
+	.app-with-left-utility > main {
+		padding-bottom: 86px;
 	}
 }

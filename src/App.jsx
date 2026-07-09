@@ -37,6 +37,16 @@ const CHAT_FONT_SIZE_PX = 12;
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const NAV_TABS = ['overzicht', 'mijn items', 'woning', 'stad', 'misdaad', 'sporten', 'reizen'];
+const MEMBER_SELECT_VARIANTS = [
+  'id, username, level, role, gender, cash, strength, xp, last_updated, jail_until, profile_photo_url, avatar_url, photo_url',
+  'id, username, level, role, gender, cash, strength, xp, last_updated, jail_until, avatar_url, photo_url',
+  'id, username, level, role, gender, cash, strength, xp, last_updated, jail_until, photo_url',
+  'id, username, level, role, gender, cash, strength, xp, last_updated, jail_until',
+  'id, username, level, gender, cash, strength, xp, last_updated, jail_until, profile_photo_url, avatar_url, photo_url',
+  'id, username, level, gender, cash, strength, xp, last_updated, jail_until, avatar_url, photo_url',
+  'id, username, level, gender, cash, strength, xp, last_updated, jail_until, photo_url',
+  'id, username, level, gender, cash, strength, xp, last_updated, jail_until'
+];
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -66,6 +76,8 @@ export default function App() {
   const [adminActionLoadingId, setAdminActionLoadingId] = useState(null);
   const [adminCashInputs, setAdminCashInputs] = useState({});
   const [adminSearchTerm, setAdminSearchTerm] = useState('');
+  const [membersSearchTerm, setMembersSearchTerm] = useState('');
+  const [membersLoadError, setMembersLoadError] = useState('');
   const [rankMenuOpenId, setRankMenuOpenId] = useState(null);
   const [cityMenuOpen, setCityMenuOpen] = useState(false);
   const [prisonMembers, setPrisonMembers] = useState([]);
@@ -86,6 +98,10 @@ export default function App() {
   const [chatUnreadCount, setChatUnreadCount] = useState(0);
   const [profilePhotoDraft, setProfilePhotoDraft] = useState('');
   const [profilePhotoError, setProfilePhotoError] = useState('');
+  const [usernameDraft, setUsernameDraft] = useState('');
+  const [usernameChangeError, setUsernameChangeError] = useState('');
+  const [usernameChangeLoading, setUsernameChangeLoading] = useState(false);
+  const membersSelectVariantRef = useRef(0);
   const dashboardScrollRef = useRef(null);
   const chatScrollRef = useRef(null);
   const shouldAutoScrollChatRef = useRef(true);
@@ -126,6 +142,15 @@ export default function App() {
   const normalizeRole = (value) => {
     const roleValue = (value || '').toString().trim().toLowerCase();
     return VALID_ROLES.includes(roleValue) ? roleValue : 'lid';
+  };
+
+  const isMissingPlayerStatsColumnError = (error, columnName) => {
+    const message = String(error?.message || '').toLowerCase();
+    return (
+      message.includes('does not exist') &&
+      message.includes('player_stats') &&
+      message.includes(String(columnName || '').toLowerCase())
+    );
   };
 
   const refreshAdminMembers = async () => {
@@ -241,22 +266,70 @@ export default function App() {
 
     const fetchOnlineMembers = async () => {
       setOnlineLoading(true);
-      const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+      setMembersLoadError('');
 
-      const { data, error } = await supabase
-        .from('player_stats')
-        .select('id, username, level, role, gender, cash, strength, xp, last_updated, jail_until')
-        .gte('last_updated', fiveMinutesAgo)
-        .order('last_updated', { ascending: false });
+      try {
+        const pageSize = 1000;
+        let from = 0;
+        let allMembers = [];
 
-      if (error) {
-        addLog('❌ Online leden laden mislukt.', 'error');
+        while (true) {
+          const to = from + pageSize - 1;
+          let batch = null;
+          let lastError = null;
+          const variantCount = MEMBER_SELECT_VARIANTS.length;
+
+          for (let attempt = 0; attempt < variantCount; attempt += 1) {
+            const variantIndex = (membersSelectVariantRef.current + attempt) % variantCount;
+            const { data, error } = await supabase
+              .from('player_stats')
+              .select(MEMBER_SELECT_VARIANTS[variantIndex])
+              .order('username', { ascending: true })
+              .range(from, to);
+
+            if (error) {
+              lastError = error;
+              continue;
+            }
+
+            membersSelectVariantRef.current = variantIndex;
+            batch = (data || []).map((member) => ({
+              ...member,
+              role: normalizeRole(member?.role)
+            }));
+            break;
+          }
+
+          if (!batch) {
+            throw lastError || new Error('Onbekende fout tijdens ophalen van leden.');
+          }
+
+          allMembers = [...allMembers, ...batch];
+
+          if (batch.length < pageSize) break;
+          from += pageSize;
+        }
+
+        setOnlineMembers(allMembers);
+      } catch (error) {
+        const message = error?.message || 'Onbekende fout tijdens laden van ledenlijst.';
+        const lowered = String(message).toLowerCase();
+        const policyHint =
+          lowered.includes('permission denied') ||
+          lowered.includes('row-level security') ||
+          lowered.includes('not allowed') ||
+          lowered.includes('not authorized');
+
+        setMembersLoadError(
+          policyHint
+            ? `Ledenlijst geblokkeerd door Supabase policy/RLS: ${message}`
+            : `Ledenlijst laden mislukt: ${message}`
+        );
+        addLog(`❌ Ledenlijst laden mislukt: ${message}`, 'error');
         setOnlineMembers([]);
-      } else {
-        setOnlineMembers(data || []);
+      } finally {
+        setOnlineLoading(false);
       }
-
-      setOnlineLoading(false);
     };
 
     fetchOnlineMembers();
@@ -291,7 +364,9 @@ export default function App() {
     if (!normalized) return '';
     const isHttp = /^https?:\/\//i.test(normalized);
     const isDataImage = /^data:image\//i.test(normalized);
-    return isHttp || isDataImage ? normalized : '';
+    const isRootRelative = normalized.startsWith('/');
+    const isBlob = /^blob:/i.test(normalized);
+    return isHttp || isDataImage || isRootRelative || isBlob ? normalized : '';
   };
 
   const getStoredProfilePhoto = (playerId) => {
@@ -559,9 +634,46 @@ export default function App() {
       (member) => (member?.username || '').trim().toLowerCase() === normalizedTarget
     );
 
+    const fetchMemberProfileById = async (memberId) => {
+      const variantCount = MEMBER_SELECT_VARIANTS.length;
+
+      for (let attempt = 0; attempt < variantCount; attempt += 1) {
+        const variantIndex = (membersSelectVariantRef.current + attempt) % variantCount;
+        const { data, error } = await supabase
+          .from('player_stats')
+          .select(MEMBER_SELECT_VARIANTS[variantIndex])
+          .eq('id', memberId)
+          .maybeSingle();
+
+        if (error) {
+          continue;
+        }
+
+        membersSelectVariantRef.current = variantIndex;
+        if (!data) return null;
+        return { ...data, role: normalizeRole(data?.role) };
+      }
+
+      return null;
+    };
+
+    const openMemberProfile = async (memberData) => {
+      if (!memberData?.id) return false;
+
+      try {
+        const data = await fetchMemberProfileById(memberData.id);
+        setSelectedMemberProfile(data || memberData);
+        setCurrentView('member-profile');
+        return true;
+      } catch (_error) {
+        setSelectedMemberProfile(memberData);
+        setCurrentView('member-profile');
+        return false;
+      }
+    };
+
     if (onlineMatch) {
-      setSelectedMemberProfile(onlineMatch);
-      setCurrentView('member-profile');
+      await openMemberProfile(onlineMatch);
       return;
     }
 
@@ -701,6 +813,12 @@ export default function App() {
     setProfilePhotoDraft(currentPhoto);
   }, [user, stats]);
 
+  useEffect(() => {
+    if (!stats?.username) return;
+    setUsernameDraft(stats.username);
+    setUsernameChangeError('');
+  }, [stats?.username]);
+
   const handleProfilePhotoFileChange = (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -743,13 +861,28 @@ export default function App() {
     let savedInDatabase = false;
 
     try {
-      const { error: dbError } = await supabase
-        .from('player_stats')
-        .update({ profile_photo_url: normalized || null })
-        .eq('id', user.id);
+      const updatePayloads = [
+        { profile_photo_url: normalized || null },
+        { avatar_url: normalized || null },
+        { photo_url: normalized || null }
+      ];
 
-      if (!dbError) {
-        savedInDatabase = true;
+      for (const payload of updatePayloads) {
+        const payloadKey = Object.keys(payload)[0];
+        const { error: dbError } = await supabase
+          .from('player_stats')
+          .update(payload)
+          .eq('id', user.id);
+
+        if (!dbError) {
+          savedInDatabase = true;
+          break;
+        }
+
+        if (!isMissingPlayerStatsColumnError(dbError, payloadKey)) {
+          addLog(`⚠️ Profielfoto cloud-opslag mislukt: ${dbError.message}`, 'error');
+          break;
+        }
       }
     } catch (_error) {
       // Fallback naar localStorage als databaseveld (nog) niet beschikbaar is.
@@ -775,6 +908,90 @@ export default function App() {
       showActionNotice('Profielfoto opgeslagen en gesynchroniseerd.', 'success');
     } else {
       showActionNotice('Profielfoto lokaal opgeslagen op dit apparaat.', 'info');
+    }
+  };
+
+  const saveUsernameChange = async () => {
+    if (!user || !stats) return;
+
+    const normalizedUsername = String(usernameDraft || '').trim();
+    if (!normalizedUsername) {
+      const message = 'Vul een gebruikersnaam in.';
+      setUsernameChangeError(message);
+      return;
+    }
+
+    if (normalizedUsername.length < 3 || normalizedUsername.length > 20) {
+      const message = 'Gebruikersnaam moet tussen 3 en 20 tekens zijn.';
+      setUsernameChangeError(message);
+      return;
+    }
+
+    if (!/^[a-zA-Z0-9_]+$/.test(normalizedUsername)) {
+      const message = 'Gebruik alleen letters, cijfers en underscore (_).';
+      setUsernameChangeError(message);
+      return;
+    }
+
+    const currentUsername = String(stats.username || '').trim();
+    if (normalizedUsername.toLowerCase() === currentUsername.toLowerCase()) {
+      showActionNotice('Je gebruikt al deze gebruikersnaam.', 'info');
+      return;
+    }
+
+    setUsernameChangeLoading(true);
+    try {
+      const { data: existingUsers, error: checkError } = await supabase
+        .from('player_stats')
+        .select('id')
+        .ilike('username', normalizedUsername)
+        .neq('id', user.id)
+        .limit(1);
+
+      if (checkError) {
+        throw new Error('Kon gebruikersnaam niet controleren. Probeer opnieuw.');
+      }
+
+      if (existingUsers && existingUsers.length > 0) {
+        throw new Error('Deze gebruikersnaam is al in gebruik.');
+      }
+
+      const { data: updatedUser, error: updateError } = await supabase
+        .from('player_stats')
+        .update({ username: normalizedUsername })
+        .eq('id', user.id)
+        .select('*')
+        .maybeSingle();
+
+      if (updateError) throw updateError;
+      if (!updatedUser) throw new Error('Kon je gebruikersnaam niet opslaan.');
+
+      setStats(updatedUser);
+      setUsernameDraft(updatedUser.username || normalizedUsername);
+      setLoginUsername(updatedUser.username || normalizedUsername);
+      setUsernameChangeError('');
+
+      try {
+        await supabase.auth.updateUser({
+          data: {
+            username: normalizedUsername,
+            display_name: normalizedUsername,
+            full_name: normalizedUsername
+          }
+        });
+      } catch (_error) {
+        // Niet blokkerend: login werkt op player_stats gebruikersnaam.
+      }
+
+      showActionNotice('Gebruikersnaam succesvol gewijzigd.', 'success');
+      addLog(`👤 Gebruikersnaam gewijzigd naar ${formatDisplayUsername(normalizedUsername)}.`, 'success');
+    } catch (error) {
+      const message = error?.message || 'Gebruikersnaam wijzigen mislukt.';
+      setUsernameChangeError(message);
+      showActionNotice(message, 'error');
+      addLog(`❌ ${message}`, 'error');
+    } finally {
+      setUsernameChangeLoading(false);
     }
   };
 
@@ -2482,6 +2699,35 @@ export default function App() {
                 </div>
               </div>
 
+              <div className="border-b border-slate-800 pb-4 mb-3">
+                <p className="text-xs text-slate-400 uppercase tracking-wider mb-2">Gebruikersnaam wijzigen</p>
+                <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
+                  <input
+                    type="text"
+                    value={usernameDraft}
+                    onChange={(e) => {
+                      setUsernameDraft(e.target.value);
+                      setUsernameChangeError('');
+                    }}
+                    maxLength={20}
+                    placeholder="Nieuwe gebruikersnaam"
+                    className="w-full sm:max-w-xs bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-rose-500 transition"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void saveUsernameChange();
+                    }}
+                    disabled={usernameChangeLoading || !usernameDraft.trim()}
+                    className="px-3 py-2 text-xs rounded-md border border-rose-700 text-rose-300 hover:bg-rose-950/30 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {usernameChangeLoading ? 'Opslaan...' : 'Opslaan gebruikersnaam'}
+                  </button>
+                </div>
+                <p className="text-[11px] text-slate-500 mt-1">3-20 tekens, alleen letters, cijfers en underscore (_).</p>
+                {usernameChangeError && <p className="text-[11px] text-red-300 mt-1">{usernameChangeError}</p>}
+              </div>
+
               <p className="text-slate-300"><span className="text-slate-500">Gebruikersnaam:</span> <span style={roleNameColorStyle(userRole)}>{stats?.username ? formatDisplayUsername(stats.username) : 'Onbekend'}</span></p>
               <p className="text-slate-300"><span className="text-slate-500">Rol:</span> <span className={roleColorClass(userRole)}>{roleLabel(userRole)}</span></p>
               <p className="text-slate-300"><span className="text-slate-500">E-mail:</span> {user?.email || email || 'Onbekend'}</p>
@@ -2656,6 +2902,13 @@ export default function App() {
   }
 
   if (currentView === 'online-members') {
+    const membersQuery = membersSearchTerm.trim().toLowerCase();
+    const filteredMembers = onlineMembers.filter((member) => {
+      if (!membersQuery) return true;
+      const usernameValue = (member?.username || '').toLowerCase();
+      return usernameValue.includes(membersQuery);
+    });
+
     return (
       <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans app-with-left-utility">
         <header className="bg-slate-900 border-b border-slate-800 py-4 px-6 flex flex-wrap justify-between items-center gap-4">
@@ -2686,22 +2939,63 @@ export default function App() {
 
         <main className="flex-grow p-6">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl max-w-3xl mx-auto">
-            <div className="flex justify-between items-center mb-3">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">🟢 Online leden</h3>
-              <span className="text-xs text-slate-500">{onlineMembers.length} online</span>
+            <div className="flex justify-between items-center mb-3 gap-2">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">👥 Ledenlijst</h3>
+              <span className="text-xs text-slate-500">{onlineMembers.length} spelers</span>
+            </div>
+
+            <div className="mb-3">
+              <input
+                type="text"
+                value={membersSearchTerm}
+                onChange={(e) => setMembersSearchTerm(e.target.value)}
+                placeholder="Zoek speler op gebruikersnaam..."
+                className="w-full sm:max-w-xs bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-rose-500 transition"
+              />
             </div>
 
             {onlineLoading ? (
-              <p className="text-xs text-slate-400">Online leden laden...</p>
+              <p className="text-xs text-slate-400">Ledenlijst laden...</p>
+            ) : membersLoadError ? (
+              <div className="text-xs rounded-lg border border-red-800/40 bg-red-950/20 text-red-200 px-3 py-2">
+                {membersLoadError}
+              </div>
             ) : onlineMembers.length === 0 ? (
-              <p className="text-xs text-slate-500">Er zijn nu geen leden online.</p>
+              <p className="text-xs text-slate-500">Er zijn nog geen spelers gevonden.</p>
+            ) : filteredMembers.length === 0 ? (
+              <p className="text-xs text-slate-500">Geen spelers gevonden voor "{membersSearchTerm}".</p>
             ) : (
               <div className="space-y-2.5">
-                {onlineMembers.map((member) => (
+                {filteredMembers.map((member) => (
                   <button
                     key={member.id}
-                    onClick={() => {
-                      setSelectedMemberProfile(member);
+                    onClick={async () => {
+                      try {
+                        const variantCount = MEMBER_SELECT_VARIANTS.length;
+                        let profileData = null;
+
+                        for (let attempt = 0; attempt < variantCount; attempt += 1) {
+                          const variantIndex = (membersSelectVariantRef.current + attempt) % variantCount;
+                          const { data, error } = await supabase
+                            .from('player_stats')
+                            .select(MEMBER_SELECT_VARIANTS[variantIndex])
+                            .eq('id', member.id)
+                            .maybeSingle();
+
+                          if (error) {
+                            continue;
+                          }
+
+                          membersSelectVariantRef.current = variantIndex;
+                          profileData = data;
+                          break;
+                        }
+
+                        setSelectedMemberProfile(profileData ? { ...profileData, role: normalizeRole(profileData?.role) } : member);
+                      } catch (_error) {
+                        setSelectedMemberProfile(member);
+                      }
+
                       setCurrentView('member-profile');
                     }}
                     className="w-full text-left bg-slate-950 border border-slate-850 rounded-xl p-3 flex justify-between items-center hover:bg-slate-800 transition"
