@@ -145,10 +145,16 @@ export default function App() {
 
   const isMissingPlayerStatsColumnError = (error, columnName) => {
     const message = String(error?.message || '').toLowerCase();
+    const targetColumn = String(columnName || '').toLowerCase();
+    const missingColumnPattern =
+      message.includes('does not exist') ||
+      message.includes('could not find') ||
+      (message.includes('schema cache') && message.includes('column'));
+
     return (
-      message.includes('does not exist') &&
+      missingColumnPattern &&
       message.includes('player_stats') &&
-      message.includes(String(columnName || '').toLowerCase())
+      message.includes(targetColumn)
     );
   };
 
