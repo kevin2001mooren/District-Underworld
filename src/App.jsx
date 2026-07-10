@@ -106,6 +106,7 @@ export default function App() {
   const forceChatBottomRef = useRef(false);
   const isChatWidgetOpenRef = useRef(false);
   const lastCloudNetworkLogAtRef = useRef(0);
+  const chatProfileRequestIdRef = useRef(0);
 
   const scrollChatToBottom = (remainingPasses = 4) => {
     const container = chatScrollRef.current;
@@ -188,8 +189,9 @@ export default function App() {
     addLog(`🚨 Synchronisatie met cloud database mislukt: netwerkfout (fetch)${offlineHint}.`, 'error');
   };
 
-  const isMissingPlayerStatsColumnError = (error, columnName) => {
+  const isMissingColumnError = (error, tableName, columnName) => {
     const message = String(error?.message || '').toLowerCase();
+    const targetTable = String(tableName || '').toLowerCase();
     const targetColumn = String(columnName || '').toLowerCase();
     const missingColumnPattern =
       message.includes('does not exist') ||
@@ -198,9 +200,13 @@ export default function App() {
 
     return (
       missingColumnPattern &&
-      message.includes('player_stats') &&
+      message.includes(targetTable) &&
       message.includes(targetColumn)
     );
+  };
+
+  const isMissingPlayerStatsColumnError = (error, columnName) => {
+    return isMissingColumnError(error, 'player_stats', columnName);
   };
 
   const refreshAdminMembers = async () => {
@@ -489,9 +495,16 @@ export default function App() {
     return date.toLocaleDateString([], { day: '2-digit', month: '2-digit', year: '2-digit' });
   };
 
-  const isOwnChatMessage = (messageUsername) => {
+  const isOwnChatMessage = (message) => {
+    const ownUserId = String(user?.id || '').trim();
+    const messageUserId = String(message?.user_id || '').trim();
+
+    if (ownUserId && messageUserId) {
+      return ownUserId === messageUserId;
+    }
+
     const own = (stats?.username || '').trim().toLowerCase();
-    const incoming = (messageUsername || '').trim().toLowerCase();
+    const incoming = (message?.username || '').trim().toLowerCase();
     return Boolean(own) && own === incoming;
   };
 
@@ -594,7 +607,7 @@ export default function App() {
     try {
       const { data, error } = await supabase
         .from('messages')
-        .select('id, username, content, created_at')
+        .select('id, user_id, username, content, created_at')
         .order('created_at', { ascending: false })
         .limit(80);
 
@@ -622,9 +635,16 @@ export default function App() {
 
     setChatSending(true);
     try {
-      const { error } = await supabase
+      let { error } = await supabase
         .from('messages')
-        .insert([{ username: messageUsername, content }]);
+        .insert([{ user_id: user.id, username: messageUsername, content }]);
+
+      if (error && isMissingColumnError(error, 'messages', 'user_id')) {
+        const fallbackInsert = await supabase
+          .from('messages')
+          .insert([{ username: messageUsername, content }]);
+        error = fallbackInsert.error;
+      }
 
       if (error) throw error;
       setChatInput('');
@@ -678,11 +698,22 @@ export default function App() {
     const targetUsername = (messageUsername || '').trim();
     if (!targetUsername) return;
 
-    const normalizedTarget = targetUsername.toLowerCase();
+    const normalizeLookupUsername = (value) =>
+      String(value || '')
+        .trim()
+        .replace(/\s+/g, ' ')
+        .toLowerCase();
+
+    const normalizedTarget = normalizeLookupUsername(targetUsername);
     if (normalizedTarget === 'systeem' || normalizedTarget === 'system') return;
+
+    const currentRequestId = chatProfileRequestIdRef.current + 1;
+    chatProfileRequestIdRef.current = currentRequestId;
+    const isLatestRequest = () => chatProfileRequestIdRef.current === currentRequestId;
 
     const ownUsername = (stats?.username || '').trim().toLowerCase();
     if (ownUsername && ownUsername === normalizedTarget) {
+      if (!isLatestRequest()) return;
       setCurrentView('profile');
       return;
     }
@@ -691,56 +722,70 @@ export default function App() {
       (member) => (member?.username || '').trim().toLowerCase() === normalizedTarget
     );
 
-    const fetchMemberProfileById = async (memberId) => {
-      const { data, error } = await supabase
-        .from('player_stats')
-        .select('*')
-        .eq('id', memberId)
-        .maybeSingle();
-
-      if (error || !data) return null;
-      return { ...data, role: normalizeRole(data?.role) };
+    const openFallbackProfile = () => {
+      if (!isLatestRequest()) return;
+      const roleFromChat = chatUserRoles[getChatUsernameKey(targetUsername)] || 'lid';
+      setSelectedMemberProfile({
+        ...(onlineMatch || {}),
+        id: onlineMatch?.id || null,
+        username: targetUsername,
+        role: normalizeRole(roleFromChat),
+        gender: onlineMatch?.gender ?? null,
+        level: onlineMatch?.level ?? null
+      });
+      setCurrentView('member-profile');
     };
 
-    const openMemberProfile = async (memberData) => {
-      if (!memberData?.id) return false;
-
-      try {
-        const data = await fetchMemberProfileById(memberData.id);
-        setSelectedMemberProfile(data || memberData);
-        setCurrentView('member-profile');
-        return true;
-      } catch (_error) {
-        setSelectedMemberProfile(memberData);
-        setCurrentView('member-profile');
-        return false;
-      }
-    };
-
-    if (onlineMatch) {
-      await openMemberProfile(onlineMatch);
-      return;
-    }
+    // Zorg dat iedere chatnaam direct opent, ook als DB tijdelijk traag is.
+    openFallbackProfile();
 
     try {
       const { data, error } = await supabase
         .from('player_stats')
         .select('*')
         .ilike('username', targetUsername)
-        .limit(1)
-        .maybeSingle();
+        .order('last_updated', { ascending: false })
+        .limit(1);
 
       if (error) throw error;
 
-      if (!data) {
-        addLog(`⚠️ Profiel van ${formatDisplayUsername(targetUsername)} niet gevonden.`, 'error');
+      if (!isLatestRequest()) return;
+
+      let resolvedProfile = (Array.isArray(data) ? data[0] : null) || null;
+
+      if (!resolvedProfile) {
+        // Extra fallback: brede DB scan + exacte genormaliseerde vergelijking.
+        const { data: scanData, error: scanError } = await supabase
+          .from('player_stats')
+          .select('*')
+          .order('last_updated', { ascending: false })
+          .limit(5000);
+
+        if (!isLatestRequest()) return;
+
+        if (!scanError && Array.isArray(scanData)) {
+          resolvedProfile = scanData.find(
+            (member) => normalizeLookupUsername(member?.username) === normalizedTarget
+          ) || null;
+        }
+      }
+
+      resolvedProfile = resolvedProfile || onlineMatch;
+
+      if (!resolvedProfile) {
+        if (!isLatestRequest()) return;
+        addLog(`⚠️ Volledig profiel van ${formatDisplayUsername(targetUsername)} niet gevonden. Basisprofiel blijft zichtbaar.`, 'info');
         return;
       }
 
-      setSelectedMemberProfile(data);
-      setCurrentView('member-profile');
+      if (!isLatestRequest()) return;
+      setSelectedMemberProfile({
+        ...resolvedProfile,
+        role: normalizeRole(resolvedProfile?.role)
+      });
     } catch (error) {
-      addLog(`❌ Profiel laden mislukt: ${error.message}`, 'error');
+      if (!isLatestRequest()) return;
+      addLog(`⚠️ Profiel laden uit database mislukt (${error.message}). Basisprofiel blijft zichtbaar.`, 'info');
     }
   };
 
@@ -1175,17 +1220,76 @@ export default function App() {
       if (updateError) throw updateError;
       if (!updatedUser) throw new Error('Kon je gebruikersnaam niet opslaan.');
 
+      const nextUsernameValue = updatedUser.username || normalizedUsername;
+      const oldUsernameLower = currentUsername.toLowerCase();
+      const nextUsernameLower = nextUsernameValue.toLowerCase();
+
       setStats(updatedUser);
-      setUsernameDraft(updatedUser.username || normalizedUsername);
-      setLoginUsername(updatedUser.username || normalizedUsername);
+      setUsernameDraft(nextUsernameValue);
+      setLoginUsername(nextUsernameValue);
       setUsernameChangeError('');
+
+      setOnlineMembers((prev) => prev.map((member) => {
+        if (!member) return member;
+        if (member.id === user.id) {
+          return { ...member, username: nextUsernameValue, role: normalizeRole(updatedUser.role) };
+        }
+        return member;
+      }));
+
+      setSelectedMemberProfile((prev) => {
+        if (!prev || prev.id !== user.id) return prev;
+        return { ...prev, username: nextUsernameValue, role: normalizeRole(updatedUser.role) };
+      });
+
+      setChatMessages((prev) => prev.map((message) => {
+        if ((message?.username || '').trim().toLowerCase() !== oldUsernameLower) {
+          return message;
+        }
+        return { ...message, username: nextUsernameValue };
+      }));
+
+      setChatUserRoles((prev) => {
+        const next = { ...prev };
+        const oldRole = next[oldUsernameLower];
+        if (oldUsernameLower !== nextUsernameLower) {
+          delete next[oldUsernameLower];
+        }
+
+        if (!next[nextUsernameLower] && oldRole) {
+          next[nextUsernameLower] = oldRole;
+        }
+
+        if (!next[nextUsernameLower]) {
+          next[nextUsernameLower] = normalizeRole(updatedUser.role);
+        }
+
+        return next;
+      });
+
+      let { error: renameMessagesError } = await supabase
+        .from('messages')
+        .update({ username: nextUsernameValue })
+        .eq('user_id', user.id);
+
+      if (renameMessagesError && isMissingColumnError(renameMessagesError, 'messages', 'user_id')) {
+        const fallbackRename = await supabase
+          .from('messages')
+          .update({ username: nextUsernameValue })
+          .ilike('username', currentUsername);
+        renameMessagesError = fallbackRename.error;
+      }
+
+      if (renameMessagesError) {
+        addLog(`⚠️ Gebruikersnaam in chatgeschiedenis niet overal bijgewerkt: ${renameMessagesError.message}`, 'error');
+      }
 
       try {
         await supabase.auth.updateUser({
           data: {
-            username: normalizedUsername,
-            display_name: normalizedUsername,
-            full_name: normalizedUsername
+            username: nextUsernameValue,
+            display_name: nextUsernameValue,
+            full_name: nextUsernameValue
           }
         });
       } catch (_error) {
@@ -1193,7 +1297,7 @@ export default function App() {
       }
 
       showActionNotice('Gebruikersnaam succesvol gewijzigd.', 'success');
-      addLog(`👤 Gebruikersnaam gewijzigd naar ${formatDisplayUsername(normalizedUsername)}.`, 'success');
+      addLog(`👤 Gebruikersnaam gewijzigd naar ${formatDisplayUsername(nextUsernameValue)}.`, 'success');
     } catch (error) {
       const message = error?.message || 'Gebruikersnaam wijzigen mislukt.';
       setUsernameChangeError(message);
@@ -2101,7 +2205,7 @@ export default function App() {
                 <p className="text-sm text-slate-400">Nog geen berichten. Start de chat!</p>
               ) : (
                 chatMessages.map((message) => {
-                  const ownMessage = isOwnChatMessage(message.username);
+                  const ownMessage = isOwnChatMessage(message);
                   const displayName = formatDisplayUsername(message.username || 'Onbekend');
                   const normalizedName = (displayName || '').trim().toLowerCase();
                   const isSystemMessage = normalizedName === 'systeem' || normalizedName === 'system';
@@ -2619,7 +2723,7 @@ export default function App() {
           const incoming = payload.new;
           void ensureChatUserRole(incoming?.username);
 
-          const incomingIsOwn = isOwnChatMessage(incoming?.username);
+          const incomingIsOwn = isOwnChatMessage(incoming);
           if (!isChatWidgetOpenRef.current && !incomingIsOwn) {
             setChatUnreadCount((prev) => prev + 1);
           }
