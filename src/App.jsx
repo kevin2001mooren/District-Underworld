@@ -29,6 +29,7 @@ const CASH_INTEGER_MAX = 2147483647;
 const CHAT_MAX_VISIBLE_LINES = 20;
 const CHAT_LINE_HEIGHT = 1.45;
 const CHAT_FONT_SIZE_PX = 12;
+const MEMBER_ONLINE_WINDOW_SECONDS = 90;
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const NAV_TABS = ['overzicht', 'mijn items', 'woning', 'stad', 'misdaad', 'sporten', 'reizen'];
@@ -311,7 +312,7 @@ export default function App() {
   }, [user, stats]);
 
   useEffect(() => {
-    if (currentView !== 'online-members' || !user) return;
+    if (currentView !== 'members' || !user) return;
 
     const fetchOnlineMembers = async () => {
       setOnlineLoading(true);
@@ -390,6 +391,14 @@ export default function App() {
     const normalized = value.trim().toLowerCase();
     if (normalized === 'liever-niet-zeggen') return 'Liever niet zeggen';
     return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+  };
+
+  const isMemberOnline = (member, nowMs = Date.now()) => {
+    const updatedAtValue = member?.last_updated;
+    if (!updatedAtValue) return false;
+    const updatedAtMs = new Date(updatedAtValue).getTime();
+    if (!Number.isFinite(updatedAtMs)) return false;
+    return nowMs - updatedAtMs <= MEMBER_ONLINE_WINDOW_SECONDS * 1000;
   };
 
   const getProfilePhotoStorageKey = (playerId) => `district-underworld-profile-photo-${playerId}`;
@@ -2852,11 +2861,11 @@ export default function App() {
               </button>
             )}
             <button
-              onClick={() => setCurrentView('online-members')}
+              onClick={() => setCurrentView('members')}
               className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
-              title="Toon online leden"
+              title="Toon leden"
             >
-              Online leden
+              Leden
             </button>
           </div>
         </header>
@@ -2983,11 +2992,11 @@ export default function App() {
           </div>
           <div className="flex items-center gap-2">
             <button
-              onClick={() => setCurrentView('online-members')}
+              onClick={() => setCurrentView('members')}
               className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
-              title="Toon online leden"
+              title="Toon leden"
             >
-              Online leden
+              Leden
             </button>
           </div>
         </header>
@@ -3133,12 +3142,26 @@ export default function App() {
     );
   }
 
-  if (currentView === 'online-members') {
+  if (currentView === 'members') {
     const membersQuery = membersSearchTerm.trim().toLowerCase();
+    const nowMs = Date.now();
+    const onlineMembersCount = onlineMembers.filter((member) => isMemberOnline(member, nowMs)).length;
     const filteredMembers = onlineMembers.filter((member) => {
       if (!membersQuery) return true;
       const usernameValue = (member?.username || '').toLowerCase();
       return usernameValue.includes(membersQuery);
+    });
+    const sortedMembers = [...filteredMembers].sort((a, b) => {
+      const aOnline = isMemberOnline(a, nowMs);
+      const bOnline = isMemberOnline(b, nowMs);
+
+      if (aOnline !== bOnline) {
+        return aOnline ? -1 : 1;
+      }
+
+      const aName = (a?.username || '').toLowerCase();
+      const bName = (b?.username || '').toLowerCase();
+      return aName.localeCompare(bName);
     });
 
     return (
@@ -3158,11 +3181,11 @@ export default function App() {
               </button>
             )}
             <button
-              onClick={() => setCurrentView('online-members')}
+              onClick={() => setCurrentView('members')}
               className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
-              title="Toon online leden"
+              title="Toon leden"
             >
-              Online leden
+              Leden
             </button>
           </div>
         </header>
@@ -3173,7 +3196,7 @@ export default function App() {
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl max-w-3xl mx-auto">
             <div className="flex justify-between items-center mb-3 gap-2">
               <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">👥 Ledenlijst</h3>
-              <span className="text-xs text-slate-500">{onlineMembers.length} spelers</span>
+              <span className="text-xs text-slate-500">{onlineMembersCount} online • {onlineMembers.length} spelers</span>
             </div>
 
             <div className="mb-3">
@@ -3198,7 +3221,10 @@ export default function App() {
               <p className="text-xs text-slate-500">Geen spelers gevonden voor "{membersSearchTerm}".</p>
             ) : (
               <div className="space-y-2.5">
-                {filteredMembers.map((member) => (
+                {sortedMembers.map((member) => {
+                  const memberIsOnline = isMemberOnline(member, nowMs);
+
+                  return (
                   <button
                     key={member.id}
                     onClick={async () => {
@@ -3219,14 +3245,25 @@ export default function App() {
                     className="w-full text-left bg-slate-950 border border-slate-850 rounded-xl p-3 flex justify-between items-center hover:bg-slate-800 transition"
                     title="Open profiel"
                   >
-                    <span className="text-sm font-semibold" style={roleNameColorStyle(member.role)}>{formatDisplayUsername(member.username || 'Onbekend')}</span>
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-sm font-semibold truncate" style={roleNameColorStyle(member.role)}>{formatDisplayUsername(member.username || 'Onbekend')}</span>
+                      <span
+                        className="text-[10px] px-1.5 py-0.5 rounded border"
+                        style={memberIsOnline
+                          ? { color: '#86efac', borderColor: 'rgba(34, 197, 94, 0.4)', backgroundColor: 'rgba(22, 101, 52, 0.22)' }
+                          : { color: '#94a3b8', borderColor: 'rgba(100, 116, 139, 0.4)', backgroundColor: 'rgba(15, 23, 42, 0.5)' }}
+                      >
+                        {memberIsOnline ? 'Online' : 'Offline'}
+                      </span>
+                    </div>
                     <span className="text-xs text-slate-400 font-mono">
                       Level {member.level || 1}
                       {' • '}
                       <span className={roleColorClass(member.role)}>{roleLabel(member.role)}</span>
                     </span>
                   </button>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -3258,11 +3295,11 @@ export default function App() {
               </button>
             )}
             <button
-              onClick={() => setCurrentView('online-members')}
+              onClick={() => setCurrentView('members')}
               className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
-              title="Toon online leden"
+              title="Toon leden"
             >
-              Online leden
+              Leden
             </button>
           </div>
         </header>
@@ -3327,11 +3364,11 @@ export default function App() {
               Mijn profiel
             </button>
             <button
-              onClick={() => setCurrentView('online-members')}
+              onClick={() => setCurrentView('members')}
               className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
-              title="Toon online leden"
+              title="Toon leden"
             >
-              Online leden
+              Leden
             </button>
           </div>
         </header>
@@ -3419,11 +3456,11 @@ export default function App() {
               Mijn profiel
             </button>
             <button
-              onClick={() => setCurrentView('online-members')}
+              onClick={() => setCurrentView('members')}
               className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
-              title="Toon online leden"
+              title="Toon leden"
             >
-              Online leden
+              Leden
             </button>
           </div>
         </header>
@@ -3496,11 +3533,11 @@ export default function App() {
               Mijn profiel
             </button>
             <button
-              onClick={() => setCurrentView('online-members')}
+              onClick={() => setCurrentView('members')}
               className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
-              title="Toon online leden"
+              title="Toon leden"
             >
-              Online leden
+              Leden
             </button>
           </div>
         </header>
@@ -3631,11 +3668,11 @@ export default function App() {
             Mijn profiel
           </button>
           <button
-            onClick={() => setCurrentView('online-members')}
+            onClick={() => setCurrentView('members')}
             className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
-            title="Toon online leden"
+            title="Toon leden"
           >
-            Online leden
+            Leden
           </button>
         </div>
       </header>
