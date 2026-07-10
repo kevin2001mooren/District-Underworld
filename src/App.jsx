@@ -883,7 +883,10 @@ export default function App() {
       if (savedPhotoField) {
         next[savedPhotoField] = normalized || null;
       } else {
-        PROFILE_PHOTO_FIELD_CANDIDATES.forEach((field) => {
+        const dynamicFields = Object.keys(next).filter((field) => PHOTO_FIELD_NAME_PATTERN.test(field));
+        const fieldsToOverwrite = Array.from(new Set([...PROFILE_PHOTO_FIELD_CANDIDATES, ...dynamicFields]));
+
+        fieldsToOverwrite.forEach((field) => {
           if (!Object.prototype.hasOwnProperty.call(next, field)) return;
           next[field] = normalized || null;
         });
