@@ -47,7 +47,6 @@ const PROFILE_PHOTO_FIELD_CANDIDATES = [
   'image_url',
   'photo'
 ];
-const PHOTO_FIELD_NAME_PATTERN = /(photo|avatar|image|pfp)/i;
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -371,10 +370,7 @@ export default function App() {
   };
 
   const resolveProfilePhoto = (playerStats, fallbackId) => {
-    const dynamicPhotoFields = Object.keys(playerStats || {}).filter((field) => PHOTO_FIELD_NAME_PATTERN.test(field));
-    const photoFieldsToCheck = Array.from(new Set([...PROFILE_PHOTO_FIELD_CANDIDATES, ...dynamicPhotoFields]));
-
-    const dbPhoto = photoFieldsToCheck
+    const dbPhoto = PROFILE_PHOTO_FIELD_CANDIDATES
       .map((field) => normalizeProfilePhotoValue(playerStats?.[field]))
       .find(Boolean) || '';
 
@@ -846,8 +842,7 @@ export default function App() {
 
     try {
       const existingFields = PROFILE_PHOTO_FIELD_CANDIDATES.filter((field) => Object.prototype.hasOwnProperty.call(stats, field));
-      const discoveredFields = Object.keys(stats || {}).filter((field) => PHOTO_FIELD_NAME_PATTERN.test(field));
-      const fieldsToTry = Array.from(new Set([...existingFields, ...discoveredFields, ...PROFILE_PHOTO_FIELD_CANDIDATES]));
+      const fieldsToTry = Array.from(new Set([...existingFields, ...PROFILE_PHOTO_FIELD_CANDIDATES]));
 
       for (const fieldName of fieldsToTry) {
         const payload = { [fieldName]: normalized || null };
@@ -897,9 +892,6 @@ export default function App() {
     });
     setProfilePhotoError('');
     if (savedInDatabase) {
-      if (savedPhotoField) {
-        addLog(`✅ Profielfoto opgeslagen in kolom: ${savedPhotoField}`, 'success');
-      }
       showActionNotice('Profielfoto opgeslagen en gesynchroniseerd.', 'success');
     } else {
       showActionNotice('Profielfoto lokaal opgeslagen op dit apparaat.', 'info');
