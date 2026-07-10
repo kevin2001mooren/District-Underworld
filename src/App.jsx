@@ -2449,8 +2449,7 @@ export default function App() {
           className="left-utility-item"
           onClick={() => {
             setCityMenuOpen(false);
-            setCurrentView('game');
-            addLog('ℹ️ instellingen knop ingedrukt.');
+            setCurrentView('settings');
           }}
         >
           Instellingen
@@ -2980,98 +2979,6 @@ export default function App() {
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl max-w-2xl mx-auto">
             <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-4">👤 Mijn profiel</h3>
             <div className="bg-slate-950 border border-slate-850 rounded-xl p-4 space-y-2.5 text-sm">
-              <div className="flex flex-col sm:flex-row gap-4 sm:items-center sm:justify-between border-b border-slate-800 pb-4 mb-3">
-                <div className="flex items-center gap-3">
-                  <div className="rounded-xl border border-slate-700 overflow-hidden" style={{ width: '72px', height: '72px', background: '#0b1220' }}>
-                    {resolveProfilePhoto(stats, user?.id) ? (
-                      <img
-                        src={resolveProfilePhoto(stats, user?.id)}
-                        alt={`Profiel van ${stats?.username || 'speler'}`}
-                        style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                      />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center text-2xl font-black text-slate-300">
-                        {(stats?.username ? formatDisplayUsername(stats.username) : 'O').charAt(0).toUpperCase()}
-                      </div>
-                    )}
-                  </div>
-                  <div>
-                    <p className="text-xs text-slate-400 uppercase tracking-wider">Profielfoto</p>
-                    <p className="text-[11px] text-slate-500 mt-1">Gebruik een URL of upload direct een afbeelding.</p>
-                  </div>
-                </div>
-
-                <div className="w-full sm:w-auto sm:min-w-[320px] space-y-2">
-                  <input
-                    type="url"
-                    value={profilePhotoDraft}
-                    onChange={(e) => {
-                      setProfilePhotoDraft(e.target.value);
-                      setProfilePhotoError('');
-                    }}
-                    placeholder="https://.../jouw-foto.jpg"
-                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-rose-500 transition"
-                  />
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={handleProfilePhotoFileChange}
-                      className="block w-full text-[11px] text-slate-400 file:mr-2 file:rounded-md file:border file:border-slate-700 file:bg-slate-900 file:px-2 file:py-1 file:text-[11px] file:text-slate-300"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setProfilePhotoDraft('');
-                        setProfilePhotoError('');
-                        void saveProfilePhoto('');
-                      }}
-                      className="px-2 py-1 text-xs rounded-md border border-slate-700 text-slate-300 hover:bg-slate-800"
-                    >
-                      Reset
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        void saveProfilePhoto();
-                      }}
-                      className="px-2 py-1 text-xs rounded-md border border-emerald-700 text-emerald-300 hover:bg-emerald-950/30"
-                    >
-                      Opslaan
-                    </button>
-                  </div>
-                  {profilePhotoError && <p className="text-[11px] text-red-300">{profilePhotoError}</p>}
-                </div>
-              </div>
-
-              <div className="border-b border-slate-800 pb-4 mb-3">
-                <p className="text-xs text-slate-400 uppercase tracking-wider mb-2">Gebruikersnaam wijzigen</p>
-                <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
-                  <input
-                    type="text"
-                    value={usernameDraft}
-                    onChange={(e) => {
-                      setUsernameDraft(e.target.value);
-                      setUsernameChangeError('');
-                    }}
-                    maxLength={20}
-                    placeholder="Nieuwe gebruikersnaam"
-                    className="w-full sm:max-w-xs bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-rose-500 transition"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => {
-                      void saveUsernameChange();
-                    }}
-                    disabled={usernameChangeLoading || !usernameDraft.trim()}
-                    className="px-3 py-2 text-xs rounded-md border border-rose-700 text-rose-300 hover:bg-rose-950/30 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {usernameChangeLoading ? 'Opslaan...' : 'Opslaan gebruikersnaam'}
-                  </button>
-                </div>
-                <p className="text-[11px] text-slate-500 mt-1">3-20 tekens, alleen letters, cijfers en underscore (_).</p>
-                {usernameChangeError && <p className="text-[11px] text-red-300 mt-1">{usernameChangeError}</p>}
-              </div>
 
               <p className="text-slate-300"><span className="text-slate-500">Gebruikersnaam:</span> <span style={roleNameColorStyle(userRole)}>{stats?.username ? formatDisplayUsername(stats.username) : 'Onbekend'}</span></p>
               <p className="text-slate-300"><span className="text-slate-500">Rol:</span> <span className={roleColorClass(userRole)}>{roleLabel(userRole)}</span></p>
@@ -3737,6 +3644,147 @@ export default function App() {
                   })}
                 </div>
               )}
+            </div>
+          </div>
+        </main>
+        {renderLeftUtilityMenu()}
+        {renderLiveChatWidget()}
+      </div>
+    );
+  }
+
+if (currentView === 'settings') {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans app-with-left-utility">
+        <header className="bg-slate-900 border-b border-slate-800 py-4 px-6 flex flex-wrap justify-between items-center gap-4">
+          <div className="flex items-center gap-3">
+            {renderHeaderPlayerInfo()}
+          </div>
+          <div className="flex items-center gap-2">
+            {canOpenStaffPanel && (
+              <button
+                onClick={() => setCurrentView('admin')}
+                className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
+                title="Open admin functies"
+              >
+                Admin
+              </button>
+            )}
+            <button
+              onClick={() => setCurrentView('profile')}
+              className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
+              title="Toon mijn profiel"
+            >
+              Mijn profiel
+            </button>
+            <button
+              onClick={() => setCurrentView('members')}
+              className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
+              title="Toon leden"
+            >
+              Leden
+            </button>
+          </div>
+        </header>
+
+        {renderTopTabs()}
+
+        <main className="flex-grow p-6">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl max-w-3xl mx-auto">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-4"> ⚙️ Instellingen</h3>
+            <div className="bg-slate-950 border border-slate-850 rounded-xl p-4 space-y-2.5 text-sm">
+              <div className="flex flex-col sm:flex-row gap-4 sm:items-center sm:justify-between border-b border-slate-800 pb-4 mb-3">
+                <div className="flex items-center gap-3">
+                  <div className="rounded-xl border border-slate-700 overflow-hidden" style={{ width: '72px', height: '72px', background: '#0b1220' }}>
+                    {resolveProfilePhoto(stats, user?.id) ? (
+                      <img
+                        src={resolveProfilePhoto(stats, user?.id)}
+                        alt={`Profiel van ${stats?.username || 'speler'}`}
+                        style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                      />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center text-2xl font-black text-slate-300">
+                        {(stats?.username ? formatDisplayUsername(stats.username) : 'O').charAt(0).toUpperCase()}
+                      </div>
+                    )}
+                  </div>
+                  <div>
+                    <p className="text-xs text-slate-400 uppercase tracking-wider">Profielfoto</p>
+                    <p className="text-[11px] text-slate-500 mt-1">Gebruik een URL of upload direct een afbeelding.</p>
+                  </div>
+                </div>
+
+                <div className="w-full sm:w-auto sm:min-w-[320px] space-y-2">
+                  <input
+                    type="url"
+                    value={profilePhotoDraft}
+                    onChange={(e) => {
+                      setProfilePhotoDraft(e.target.value);
+                      setProfilePhotoError('');
+                    }}
+                    placeholder="https://.../jouw-foto.jpg"
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-rose-500 transition"
+                  />
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={handleProfilePhotoFileChange}
+                      className="block w-full text-[11px] text-slate-400 file:mr-2 file:rounded-md file:border file:border-slate-700 file:bg-slate-900 file:px-2 file:py-1 file:text-[11px] file:text-slate-300"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setProfilePhotoDraft('');
+                        setProfilePhotoError('');
+                        void saveProfilePhoto('');
+                      }}
+                      className="px-2 py-1 text-xs rounded-md border border-slate-700 text-slate-300 hover:bg-slate-800"
+                    >
+                      Reset
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void saveProfilePhoto();
+                      }}
+                      className="px-2 py-1 text-xs rounded-md border border-emerald-700 text-emerald-300 hover:bg-emerald-950/30"
+                    >
+                      Opslaan
+                    </button>
+                  </div>
+                  {profilePhotoError && <p className="text-[11px] text-red-300">{profilePhotoError}</p>}
+                </div>
+
+                <div className="border-b border-slate-800 pb-4 mb-3">
+                <p className="text-xs text-slate-400 uppercase tracking-wider mb-2">Gebruikersnaam wijzigen</p>
+                <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
+                  <input
+                    type="text"
+                    value={usernameDraft}
+                    onChange={(e) => {
+                      setUsernameDraft(e.target.value);
+                      setUsernameChangeError('');
+                    }}
+                    maxLength={20}
+                    placeholder="Nieuwe gebruikersnaam"
+                    className="w-full sm:max-w-xs bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-rose-500 transition"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void saveUsernameChange();
+                    }}
+                    disabled={usernameChangeLoading || !usernameDraft.trim()}
+                    className="px-3 py-2 text-xs rounded-md border border-rose-700 text-rose-300 hover:bg-rose-950/30 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {usernameChangeLoading ? 'Opslaan...' : 'Opslaan gebruikersnaam'}
+                  </button>
+                </div>
+                <p className="text-[11px] text-slate-500 mt-1">3-20 tekens, alleen letters, cijfers en underscore (_).</p>
+                {usernameChangeError && <p className="text-[11px] text-red-300 mt-1">{usernameChangeError}</p>}
+              </div>
+              </div>
             </div>
           </div>
         </main>
