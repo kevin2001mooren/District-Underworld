@@ -104,6 +104,7 @@ export default function App() {
   const chatUserRolesRef = useRef({});
   const forceChatBottomRef = useRef(false);
   const isChatWidgetOpenRef = useRef(false);
+  const lastCloudNetworkLogAtRef = useRef(0);
 
   const scrollChatToBottom = (remainingPasses = 4) => {
     const container = chatScrollRef.current;
@@ -148,6 +149,42 @@ export default function App() {
       message.includes('load failed') ||
       (name === 'typeerror' && message.includes('fetch'))
     );
+  };
+
+  const summarizeCloudError = (error) => {
+    const values = [error?.code, error?.message, error?.details, error?.hint]
+      .filter(Boolean)
+      .map((value) => String(value).replace(/\s+/g, ' ').trim())
+      .filter(Boolean)
+      .map((value) => {
+        const atIndex = value.toLowerCase().indexOf(' at ');
+        return atIndex > 0 ? value.slice(0, atIndex).trim() : value;
+      })
+      .filter(Boolean);
+
+    const deduped = [];
+    values.forEach((value) => {
+      const lowered = value.toLowerCase();
+      if (!deduped.some((item) => item.toLowerCase() === lowered)) {
+        deduped.push(value);
+      }
+    });
+
+    if (deduped.length === 0) return 'onbekende fout';
+    return deduped.join(' | ');
+  };
+
+  const logCloudNetworkIssueThrottled = () => {
+    const now = Date.now();
+    if (now - lastCloudNetworkLogAtRef.current < 15000) {
+      return;
+    }
+
+    lastCloudNetworkLogAtRef.current = now;
+    const offlineHint = typeof navigator !== 'undefined' && navigator.onLine === false
+      ? ' (apparaat lijkt offline)'
+      : '';
+    addLog(`🚨 Synchronisatie met cloud database mislukt: netwerkfout (fetch)${offlineHint}.`, 'error');
   };
 
   const isMissingPlayerStatsColumnError = (error, columnName) => {
@@ -1136,23 +1173,29 @@ export default function App() {
           continue;
         }
 
-        const parts = [error.code, error.message, error.details, error.hint].filter(Boolean);
-        addLog(`🚨 Synchronisatie met cloud database mislukt: ${parts.join(' | ')}`, 'error');
+        if (isLikelyNetworkFetchError(error)) {
+          logCloudNetworkIssueThrottled();
+          return false;
+        }
+
+        addLog(`🚨 Synchronisatie met cloud database mislukt: ${summarizeCloudError(error)}`, 'error');
         return false;
       } catch (err) {
         if (attempt === 1 && isLikelyNetworkFetchError(err)) {
           continue;
         }
 
-        const offlineHint = typeof navigator !== 'undefined' && navigator.onLine === false
-          ? ' | apparaat lijkt offline'
-          : '';
-        addLog(`🚨 Synchronisatie met cloud database mislukt: ${err?.message || String(err)}${offlineHint}`, 'error');
+        if (isLikelyNetworkFetchError(err)) {
+          logCloudNetworkIssueThrottled();
+          return false;
+        }
+
+        addLog(`🚨 Synchronisatie met cloud database mislukt: ${summarizeCloudError(err)}`, 'error');
         return false;
       }
     }
 
-    addLog('🚨 Synchronisatie met cloud database mislukt: netwerkfout (fetch).', 'error');
+    logCloudNetworkIssueThrottled();
     return false;
   };
 
