@@ -900,6 +900,50 @@ export default function App() {
     let savedPhotoField = null;
     const expectedPhotoValue = normalized || '';
     let blockedByPolicy = false;
+    let hadNetworkIssue = false;
+    let hasKnownPhotoFields = false;
+
+    const updatePhotoWithRetry = async (payload, selectFields) => {
+      for (let attempt = 1; attempt <= 2; attempt += 1) {
+        try {
+          const { data, error } = await supabase
+            .from('player_stats')
+            .update(payload)
+            .eq('id', user.id)
+            .select(selectFields)
+            .maybeSingle();
+
+          if (!error) {
+            return { data, error: null };
+          }
+
+          if (attempt === 1 && isLikelyNetworkFetchError(error)) {
+            hadNetworkIssue = true;
+            continue;
+          }
+
+          if (isLikelyNetworkFetchError(error)) {
+            hadNetworkIssue = true;
+          }
+
+          return { data: null, error };
+        } catch (error) {
+          if (attempt === 1 && isLikelyNetworkFetchError(error)) {
+            hadNetworkIssue = true;
+            continue;
+          }
+
+          if (isLikelyNetworkFetchError(error)) {
+            hadNetworkIssue = true;
+          }
+
+          return { data: null, error };
+        }
+      }
+
+      hadNetworkIssue = true;
+      return { data: null, error: new Error('Failed to fetch') };
+    };
 
     try {
       const existingFields = PROFILE_PHOTO_FIELD_CANDIDATES.filter((field) => Object.prototype.hasOwnProperty.call(stats, field));
@@ -907,18 +951,17 @@ export default function App() {
       const fieldsToTry = Array.from(new Set([...existingFields, ...discoveredFields, ...PROFILE_PHOTO_FIELD_CANDIDATES]));
 
       const fieldsPresentInRow = Array.from(new Set([...existingFields, ...discoveredFields]));
+      hasKnownPhotoFields = fieldsPresentInRow.length > 0;
       if (fieldsPresentInRow.length > 0) {
         const bulkPayload = fieldsPresentInRow.reduce((acc, fieldName) => {
           acc[fieldName] = normalized || null;
           return acc;
         }, {});
 
-        const { data: updatedRow, error: bulkError } = await supabase
-          .from('player_stats')
-          .update(bulkPayload)
-          .eq('id', user.id)
-          .select(`id, ${fieldsPresentInRow.join(', ')}`)
-          .maybeSingle();
+        const { data: updatedRow, error: bulkError } = await updatePhotoWithRetry(
+          bulkPayload,
+          `id, ${fieldsPresentInRow.join(', ')}`
+        );
 
         if (!bulkError) {
           const allFieldsSynced = fieldsPresentInRow.every(
@@ -943,12 +986,10 @@ export default function App() {
         // Fallback voor databases waar nog geen bekend fotoveld op de row aanwezig is.
         for (const fieldName of fieldsToTry) {
           const payload = { [fieldName]: normalized || null };
-          const { data: updatedRow, error: dbError } = await supabase
-            .from('player_stats')
-            .update(payload)
-            .eq('id', user.id)
-            .select(`id, ${fieldName}`)
-            .maybeSingle();
+          const { data: updatedRow, error: dbError } = await updatePhotoWithRetry(
+            payload,
+            `id, ${fieldName}`
+          );
 
           if (!dbError) {
             const resolvedFromDb = normalizeProfilePhotoValue(updatedRow?.[fieldName]);
@@ -974,13 +1015,35 @@ export default function App() {
 
     try {
       const key = getProfilePhotoStorageKey(user.id);
-      if (normalized) {
-        window.localStorage.setItem(key, normalized);
-      } else {
+      if (hasKnownPhotoFields) {
+        // In moderne setups met echte DB fotovelden willen we geen lokale override.
         window.localStorage.removeItem(key);
+      } else {
+        if (normalized) {
+          window.localStorage.setItem(key, normalized);
+        } else {
+          window.localStorage.removeItem(key);
+        }
       }
     } catch (_error) {
       // Lokale opslag kan falen in private mode; UI blijft wel werken in-memory.
+    }
+
+    const allowLocalOnlyFallback = !hasKnownPhotoFields;
+    if (!savedInDatabase && !allowLocalOnlyFallback) {
+      if (hadNetworkIssue) {
+        setProfilePhotoError('Opslaan mislukt door netwerkprobleem. Probeer opnieuw op stabiel internet.');
+        showActionNotice('Profielfoto niet opgeslagen in cloud (netwerkfout).', 'error');
+        logCloudNetworkIssueThrottled();
+      } else if (blockedByPolicy) {
+        addLog('⚠️ Profielfoto kon niet naar cloud worden geschreven (mogelijk RLS/policy blokkade).', 'error');
+        setProfilePhotoError('Cloud-opslag geblokkeerd. Controleer Supabase update policy voor player_stats.');
+        showActionNotice('Profielfoto niet opgeslagen in cloud.', 'error');
+      } else {
+        setProfilePhotoError('Profielfoto opslaan mislukt. Probeer opnieuw.');
+        showActionNotice('Profielfoto niet opgeslagen in cloud.', 'error');
+      }
+      return;
     }
 
     setStats((prev) => {
@@ -1043,10 +1106,7 @@ export default function App() {
       }
       showActionNotice('Profielfoto opgeslagen en gesynchroniseerd.', 'success');
     } else {
-      if (blockedByPolicy) {
-        addLog('⚠️ Profielfoto kon niet naar cloud worden geschreven (mogelijk RLS/policy blokkade).', 'error');
-        setProfilePhotoError('Cloud-opslag geblokkeerd. Controleer Supabase update policy voor player_stats.');
-      }
+      // Alleen nog mogelijk op legacy setups zonder fotovelden in de DB.
       showActionNotice('Profielfoto lokaal opgeslagen op dit apparaat.', 'info');
     }
   };
