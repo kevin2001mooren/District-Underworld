@@ -849,6 +849,8 @@ export default function App() {
 
     let savedInDatabase = false;
     let savedPhotoField = null;
+    const expectedPhotoValue = normalized || '';
+    let blockedByPolicy = false;
 
     try {
       const existingFields = PROFILE_PHOTO_FIELD_CANDIDATES.filter((field) => Object.prototype.hasOwnProperty.call(stats, field));
@@ -857,15 +859,23 @@ export default function App() {
 
       for (const fieldName of fieldsToTry) {
         const payload = { [fieldName]: normalized || null };
-        const { error: dbError } = await supabase
+        const { data: updatedRow, error: dbError } = await supabase
           .from('player_stats')
           .update(payload)
-          .eq('id', user.id);
+          .eq('id', user.id)
+          .select(`id, ${fieldName}`)
+          .maybeSingle();
 
         if (!dbError) {
-          savedInDatabase = true;
-          savedPhotoField = fieldName;
-          break;
+          const resolvedFromDb = normalizeProfilePhotoValue(updatedRow?.[fieldName]);
+          if (updatedRow && resolvedFromDb === expectedPhotoValue) {
+            savedInDatabase = true;
+            savedPhotoField = fieldName;
+            break;
+          }
+
+          blockedByPolicy = true;
+          continue;
         }
 
         if (!isMissingPlayerStatsColumnError(dbError, fieldName)) {
@@ -905,12 +915,52 @@ export default function App() {
       return next;
     });
     setProfilePhotoError('');
+    setOnlineMembers((prev) => prev.map((member) => {
+      if (!member || member.id !== user.id) return member;
+      const nextMember = { ...member };
+      const dynamicFields = Object.keys(nextMember).filter((field) => PHOTO_FIELD_NAME_PATTERN.test(field));
+      const fieldsToOverwrite = Array.from(new Set([...PROFILE_PHOTO_FIELD_CANDIDATES, ...dynamicFields]));
+
+      fieldsToOverwrite.forEach((field) => {
+        if (!Object.prototype.hasOwnProperty.call(nextMember, field)) return;
+        nextMember[field] = normalized || null;
+      });
+
+      if (savedPhotoField && !Object.prototype.hasOwnProperty.call(nextMember, savedPhotoField)) {
+        nextMember[savedPhotoField] = normalized || null;
+      }
+
+      return nextMember;
+    }));
+
+    setSelectedMemberProfile((prev) => {
+      if (!prev || prev.id !== user.id) return prev;
+      const next = { ...prev };
+      const dynamicFields = Object.keys(next).filter((field) => PHOTO_FIELD_NAME_PATTERN.test(field));
+      const fieldsToOverwrite = Array.from(new Set([...PROFILE_PHOTO_FIELD_CANDIDATES, ...dynamicFields]));
+
+      fieldsToOverwrite.forEach((field) => {
+        if (!Object.prototype.hasOwnProperty.call(next, field)) return;
+        next[field] = normalized || null;
+      });
+
+      if (savedPhotoField && !Object.prototype.hasOwnProperty.call(next, savedPhotoField)) {
+        next[savedPhotoField] = normalized || null;
+      }
+
+      return next;
+    });
+
     if (savedInDatabase) {
       if (savedPhotoField) {
         addLog(`✅ Profielfoto opgeslagen in kolom: ${savedPhotoField}`, 'success');
       }
       showActionNotice('Profielfoto opgeslagen en gesynchroniseerd.', 'success');
     } else {
+      if (blockedByPolicy) {
+        addLog('⚠️ Profielfoto kon niet naar cloud worden geschreven (mogelijk RLS/policy blokkade).', 'error');
+        setProfilePhotoError('Cloud-opslag geblokkeerd. Controleer Supabase update policy voor player_stats.');
+      }
       showActionNotice('Profielfoto lokaal opgeslagen op dit apparaat.', 'info');
     }
   };
