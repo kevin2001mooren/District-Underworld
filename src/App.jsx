@@ -139,6 +139,17 @@ export default function App() {
     return VALID_ROLES.includes(roleValue) ? roleValue : 'lid';
   };
 
+  const isLikelyNetworkFetchError = (error) => {
+    const message = String(error?.message || '').toLowerCase();
+    const name = String(error?.name || '').toLowerCase();
+    return (
+      message.includes('failed to fetch') ||
+      message.includes('networkerror') ||
+      message.includes('load failed') ||
+      (name === 'typeerror' && message.includes('fetch'))
+    );
+  };
+
   const isMissingPlayerStatsColumnError = (error, columnName) => {
     const message = String(error?.message || '').toLowerCase();
     const targetColumn = String(columnName || '').toLowerCase();
@@ -1056,18 +1067,43 @@ export default function App() {
 
     setStats(prev => ({ ...prev, ...payload }));
 
-    const { error } = await supabase
-      .from('player_stats')
-      .update(payload)
-      .eq('id', user.id);
+    const runCloudUpdate = async () => {
+      return supabase
+        .from('player_stats')
+        .update(payload)
+        .eq('id', user.id);
+    };
 
-    if (error) {
-      const parts = [error.code, error.message, error.details, error.hint].filter(Boolean);
-      addLog(`🚨 Synchronisatie met cloud database mislukt: ${parts.join(' | ')}`, 'error');
-      return false;
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      try {
+        const { error } = await runCloudUpdate();
+
+        if (!error) {
+          return true;
+        }
+
+        if (attempt === 1 && isLikelyNetworkFetchError(error)) {
+          continue;
+        }
+
+        const parts = [error.code, error.message, error.details, error.hint].filter(Boolean);
+        addLog(`🚨 Synchronisatie met cloud database mislukt: ${parts.join(' | ')}`, 'error');
+        return false;
+      } catch (err) {
+        if (attempt === 1 && isLikelyNetworkFetchError(err)) {
+          continue;
+        }
+
+        const offlineHint = typeof navigator !== 'undefined' && navigator.onLine === false
+          ? ' | apparaat lijkt offline'
+          : '';
+        addLog(`🚨 Synchronisatie met cloud database mislukt: ${err?.message || String(err)}${offlineHint}`, 'error');
+        return false;
+      }
     }
 
-    return true;
+    addLog('🚨 Synchronisatie met cloud database mislukt: netwerkfout (fetch).', 'error');
+    return false;
   };
 
   // ==========================================
