@@ -3,7 +3,6 @@ import { createPortal } from 'react-dom';
 import './Game.css';
 import { createClient } from '@supabase/supabase-js';
 import { Shield, Skull, Zap, Swords, Coins, User, Lock, Loader2, Award, Clock } from 'lucide-react';
-
 const SUPABASE_URL = "https://utqwbqymcbgoqunpjfff.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InV0cXdicXltY2Jnb3F1bnBqZmZmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMTAyMTUsImV4cCI6MjA5ODc4NjIxNX0.jirvlYKUSSmXDT-OC50zOR5TKVYEwT8NFAIFOBGhxSY";
 const APP_PUBLIC_URL = "https://district-underworld.vercel.app/";
@@ -714,11 +713,11 @@ export default function App() {
   const fetchPlayerStats = async (user) => {
     try {
       setLoading(true);
-      
+
       // Haal de naam uit de metadata (als die bestaat)
       const metaUsername = user.user_metadata?.username;
       const metaGender = user.user_metadata?.gender;
-      
+
       let { data, error } = await supabase
         .from('player_stats')
         .select('*')
@@ -2452,7 +2451,7 @@ export default function App() {
       <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4">
         <div className="w-full max-w-sm bg-slate-900 border border-slate-850 rounded-2xl p-6 shadow-2xl relative overflow-hidden">
           <div className="absolute top-0 right-0 w-32 h-32 bg-rose-500/5 rounded-full blur-3xl"></div>
-          
+
           <div className="flex flex-col items-center mb-8">
             <div className="p-3 bg-rose-500/10 rounded-xl border border-rose-500/20 mb-3">
               <Skull className="h-8 w-8 text-rose-500 animate-pulse" />
@@ -3405,11 +3404,11 @@ export default function App() {
       <main ref={dashboardScrollRef} className="flex-grow grid grid-cols-1 lg:grid-cols-12 gap-6 p-6 overflow-y-auto">
         {/* STATS & ACTIONS (Left 5 Cols) */}
         <section className="lg:col-span-5 flex flex-col gap-6">
-          
+
           {/* STATS CARD */}
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl relative overflow-hidden">
             <div className="absolute top-0 right-0 w-32 h-32 bg-rose-500/5 rounded-full blur-2xl"></div>
-            
+
             <div className="flex justify-between items-start mb-6">
               <div>
                 <h2 className="text-xl font-bold tracking-tight" style={roleNameColorStyle(userRole)}>{stats?.username ? formatDisplayUsername(stats.username) : "Petty Criminal"}</h2>
@@ -3499,7 +3498,7 @@ export default function App() {
             <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-4">
               📋 Activiteitenlogboek
             </h3>
-            
+
             <div className="flex-grow bg-slate-950 rounded-xl p-4 font-mono text-xs border border-slate-850 overflow-y-auto max-h-[400px] lg:max-h-none space-y-2.5">
               {logs.length === 0 ? (
                 <p className="text-slate-600 italic">Nog geen activiteiten gelogd. Start een operatie om het logboek op te bouwen.</p>
