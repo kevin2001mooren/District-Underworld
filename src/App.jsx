@@ -875,11 +875,12 @@ export default function App() {
     reader.readAsDataURL(file);
   };
 
-  const saveProfilePhoto = async () => {
+  const saveProfilePhoto = async (nextPhotoDraft = null) => {
     if (!user || !stats) return;
 
-    const normalized = normalizeProfilePhotoValue(profilePhotoDraft);
-    if (profilePhotoDraft.trim() && !normalized) {
+    const draftSource = typeof nextPhotoDraft === 'string' ? nextPhotoDraft : profilePhotoDraft;
+    const normalized = normalizeProfilePhotoValue(draftSource);
+    if (draftSource.trim() && !normalized) {
       setProfilePhotoError('Gebruik een geldige afbeelding-URL (http/https) of upload een foto.');
       return;
     }
@@ -952,6 +953,7 @@ export default function App() {
       return next;
     });
     setProfilePhotoError('');
+    setProfilePhotoDraft(normalized);
     setOnlineMembers((prev) => prev.map((member) => {
       if (!member || member.id !== user.id) return member;
       const nextMember = { ...member };
@@ -2802,6 +2804,7 @@ export default function App() {
                       onClick={() => {
                         setProfilePhotoDraft('');
                         setProfilePhotoError('');
+                        void saveProfilePhoto('');
                       }}
                       className="px-2 py-1 text-xs rounded-md border border-slate-700 text-slate-300 hover:bg-slate-800"
                     >
