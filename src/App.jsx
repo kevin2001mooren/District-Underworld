@@ -416,12 +416,22 @@ export default function App() {
   const resolveProfilePhoto = (playerStats, fallbackId) => {
     const dynamicPhotoFields = Object.keys(playerStats || {}).filter((field) => PHOTO_FIELD_NAME_PATTERN.test(field));
     const photoFieldsToCheck = Array.from(new Set([...PROFILE_PHOTO_FIELD_CANDIDATES, ...dynamicPhotoFields]));
+    const hasKnownPhotoField = photoFieldsToCheck.some((field) => Object.prototype.hasOwnProperty.call(playerStats || {}, field));
 
     const dbPhoto = photoFieldsToCheck
       .map((field) => normalizeProfilePhotoValue(playerStats?.[field]))
       .find(Boolean) || '';
 
     if (dbPhoto) return dbPhoto;
+
+    // Als de speler een echte fotokolom in de DB heeft maar die is leeg/null,
+    // respecteer dat expliciet en gebruik geen oude lokale cachewaarde.
+    if (!dbPhoto && hasKnownPhotoField) {
+      const genderValue = String(playerStats?.gender || '').trim().toLowerCase();
+      if (genderValue === 'vrouw' || genderValue === 'female') return DEFAULT_FEMALE_PROFILE_PHOTO;
+      if (genderValue === 'man' || genderValue === 'male') return DEFAULT_MALE_PROFILE_PHOTO;
+      return '';
+    }
 
     const targetId = playerStats?.id || fallbackId;
     const storedPhoto = getStoredProfilePhoto(targetId);
@@ -833,11 +843,12 @@ export default function App() {
     }
   };
 
+  const ownResolvedProfilePhoto = resolveProfilePhoto(stats, user?.id);
+
   useEffect(() => {
     if (!user || !stats) return;
-    const currentPhoto = resolveProfilePhoto(stats, user.id);
-    setProfilePhotoDraft(currentPhoto);
-  }, [user, stats]);
+    setProfilePhotoDraft((prev) => (prev === ownResolvedProfilePhoto ? prev : ownResolvedProfilePhoto));
+  }, [user?.id, stats?.id, ownResolvedProfilePhoto]);
 
   useEffect(() => {
     if (!stats?.username) return;
@@ -895,30 +906,66 @@ export default function App() {
       const discoveredFields = Object.keys(stats || {}).filter((field) => PHOTO_FIELD_NAME_PATTERN.test(field));
       const fieldsToTry = Array.from(new Set([...existingFields, ...discoveredFields, ...PROFILE_PHOTO_FIELD_CANDIDATES]));
 
-      for (const fieldName of fieldsToTry) {
-        const payload = { [fieldName]: normalized || null };
-        const { data: updatedRow, error: dbError } = await supabase
+      const fieldsPresentInRow = Array.from(new Set([...existingFields, ...discoveredFields]));
+      if (fieldsPresentInRow.length > 0) {
+        const bulkPayload = fieldsPresentInRow.reduce((acc, fieldName) => {
+          acc[fieldName] = normalized || null;
+          return acc;
+        }, {});
+
+        const { data: updatedRow, error: bulkError } = await supabase
           .from('player_stats')
-          .update(payload)
+          .update(bulkPayload)
           .eq('id', user.id)
-          .select(`id, ${fieldName}`)
+          .select(`id, ${fieldsPresentInRow.join(', ')}`)
           .maybeSingle();
 
-        if (!dbError) {
-          const resolvedFromDb = normalizeProfilePhotoValue(updatedRow?.[fieldName]);
-          if (updatedRow && resolvedFromDb === expectedPhotoValue) {
+        if (!bulkError) {
+          const allFieldsSynced = fieldsPresentInRow.every(
+            (fieldName) => normalizeProfilePhotoValue(updatedRow?.[fieldName]) === expectedPhotoValue
+          );
+
+          if (updatedRow && allFieldsSynced) {
             savedInDatabase = true;
-            savedPhotoField = fieldName;
-            break;
+            savedPhotoField = fieldsPresentInRow[0] || null;
+          } else {
+            blockedByPolicy = true;
+          }
+        } else if (!isMissingPlayerStatsColumnError(bulkError, fieldsPresentInRow[0])) {
+          addLog(`⚠️ Profielfoto cloud-opslag mislukt: ${bulkError.message}`, 'error');
+        }
+      }
+
+      if (savedInDatabase) {
+        // Klaar: alle bekende fotovelden zijn in 1x bijgewerkt.
+        // Geen extra per-veld fallback nodig.
+      } else {
+        // Fallback voor databases waar nog geen bekend fotoveld op de row aanwezig is.
+        for (const fieldName of fieldsToTry) {
+          const payload = { [fieldName]: normalized || null };
+          const { data: updatedRow, error: dbError } = await supabase
+            .from('player_stats')
+            .update(payload)
+            .eq('id', user.id)
+            .select(`id, ${fieldName}`)
+            .maybeSingle();
+
+          if (!dbError) {
+            const resolvedFromDb = normalizeProfilePhotoValue(updatedRow?.[fieldName]);
+            if (updatedRow && resolvedFromDb === expectedPhotoValue) {
+              savedInDatabase = true;
+              savedPhotoField = fieldName;
+              break;
+            }
+
+            blockedByPolicy = true;
+            continue;
           }
 
-          blockedByPolicy = true;
-          continue;
-        }
-
-        if (!isMissingPlayerStatsColumnError(dbError, fieldName)) {
-          addLog(`⚠️ Profielfoto cloud-opslag mislukt: ${dbError.message}`, 'error');
-          break;
+          if (!isMissingPlayerStatsColumnError(dbError, fieldName)) {
+            addLog(`⚠️ Profielfoto cloud-opslag mislukt: ${dbError.message}`, 'error');
+            break;
+          }
         }
       }
     } catch (_error) {
@@ -939,16 +986,16 @@ export default function App() {
     setStats((prev) => {
       if (!prev) return prev;
       const next = { ...prev };
-      if (savedPhotoField) {
-        next[savedPhotoField] = normalized || null;
-      } else {
-        const dynamicFields = Object.keys(next).filter((field) => PHOTO_FIELD_NAME_PATTERN.test(field));
-        const fieldsToOverwrite = Array.from(new Set([...PROFILE_PHOTO_FIELD_CANDIDATES, ...dynamicFields]));
+      const dynamicFields = Object.keys(next).filter((field) => PHOTO_FIELD_NAME_PATTERN.test(field));
+      const fieldsToOverwrite = Array.from(new Set([...PROFILE_PHOTO_FIELD_CANDIDATES, ...dynamicFields]));
 
-        fieldsToOverwrite.forEach((field) => {
-          if (!Object.prototype.hasOwnProperty.call(next, field)) return;
-          next[field] = normalized || null;
-        });
+      fieldsToOverwrite.forEach((field) => {
+        if (!Object.prototype.hasOwnProperty.call(next, field)) return;
+        next[field] = normalized || null;
+      });
+
+      if (savedPhotoField && !Object.prototype.hasOwnProperty.call(next, savedPhotoField)) {
+        next[savedPhotoField] = normalized || null;
       }
       return next;
     });
