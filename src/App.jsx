@@ -30,6 +30,7 @@ const CHAT_MAX_VISIBLE_LINES = 20;
 const CHAT_LINE_HEIGHT = 1.45;
 const CHAT_FONT_SIZE_PX = 12;
 const MEMBER_ONLINE_WINDOW_SECONDS = 90;
+const PRESENCE_HEARTBEAT_INTERVAL_MS = 45000;
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const NAV_TABS = ['overzicht', 'mijn items', 'woning', 'stad', 'misdaad', 'sporten', 'reizen'];
@@ -95,6 +96,7 @@ export default function App() {
   const [chatUnreadCount, setChatUnreadCount] = useState(0);
   const [profilePhotoDraft, setProfilePhotoDraft] = useState('');
   const [profilePhotoError, setProfilePhotoError] = useState('');
+  const [isProfilePhotoMenuOpen, setIsProfilePhotoMenuOpen] = useState(false);
   const [usernameDraft, setUsernameDraft] = useState('');
   const [usernameChangeError, setUsernameChangeError] = useState('');
   const [usernameChangeLoading, setUsernameChangeLoading] = useState(false);
@@ -397,6 +399,31 @@ export default function App() {
     const normalized = value.trim().toLowerCase();
     if (normalized === 'liever-niet-zeggen') return 'Liever niet zeggen';
     return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+  };
+
+  const formatLastSeenLabel = (value, member = null) => {
+    if (member && isMemberOnline(member)) return 'Online';
+    if (!value) return 'Onbekend';
+    const date = new Date(value);
+    if (!Number.isFinite(date.getTime())) return 'Onbekend';
+
+    const now = new Date();
+    const isToday =
+      date.getFullYear() === now.getFullYear() &&
+      date.getMonth() === now.getMonth() &&
+      date.getDate() === now.getDate();
+
+    if (isToday) {
+      return `Vandaag om ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+    }
+
+    return date.toLocaleString([], {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
   };
 
   const isMemberOnline = (member, nowMs = Date.now()) => {
@@ -909,6 +936,56 @@ export default function App() {
     setUsernameDraft(stats.username);
     setUsernameChangeError('');
   }, [stats?.username]);
+
+  useEffect(() => {
+    if (currentView === 'profile') return;
+    setIsProfilePhotoMenuOpen(false);
+  }, [currentView]);
+
+  useEffect(() => {
+    setCityMenuOpen(false);
+  }, [currentView]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const heartbeatPresence = async () => {
+      const nowIso = new Date().toISOString();
+
+      try {
+        const { error } = await supabase
+          .from('player_stats')
+          .update({ last_updated: nowIso })
+          .eq('id', user.id);
+
+        if (error) {
+          if (isLikelyNetworkFetchError(error)) {
+            logCloudNetworkIssueThrottled();
+          }
+          return;
+        }
+
+        setStats((prev) => (prev && prev.id === user.id ? { ...prev, last_updated: nowIso } : prev));
+        setOnlineMembers((prev) => prev.map((member) => (
+          member?.id === user.id ? { ...member, last_updated: nowIso } : member
+        )));
+        setSelectedMemberProfile((prev) => (
+          prev && prev.id === user.id ? { ...prev, last_updated: nowIso } : prev
+        ));
+      } catch (error) {
+        if (isLikelyNetworkFetchError(error)) {
+          logCloudNetworkIssueThrottled();
+        }
+      }
+    };
+
+    void heartbeatPresence();
+    const interval = setInterval(() => {
+      void heartbeatPresence();
+    }, PRESENCE_HEARTBEAT_INTERVAL_MS);
+
+    return () => clearInterval(interval);
+  }, [user?.id]);
 
   const handleProfilePhotoFileChange = (event) => {
     const file = event.target.files?.[0];
@@ -2354,7 +2431,19 @@ export default function App() {
     );
   };
 
-  const renderTopTabs = () => (
+  const renderTopTabs = () => {
+    const highlightedTab =
+      currentView === 'game'
+        ? activeTab
+        : currentView === 'crime'
+          ? 'misdaad'
+          : currentView === 'sports'
+            ? 'sporten'
+            : currentView === 'prison'
+              ? 'stad'
+              : null;
+
+    return (
     <div className="bg-slate-900 border-b border-slate-800 px-6 py-2 grid grid-cols-7 gap-2 w-full relative" style={{ zIndex: 200 }}>
       {NAV_TABS.map((tab) => {
         if (tab !== 'stad') {
@@ -2375,7 +2464,7 @@ export default function App() {
                 setCurrentView(tab === 'misdaad' ? 'crime' : tab === 'sporten' ? 'sports' : 'game');
               }}
               className={`w-full px-3 py-1 rounded-lg text-base font-bold border transition ${
-                activeTab === tab
+                highlightedTab === tab
                   ? 'bg-rose-600 text-white border-rose-500/20'
                   : 'bg-slate-950 text-slate-300 border-slate-800 hover:bg-slate-800 hover:text-white'
               }`}
@@ -2390,7 +2479,7 @@ export default function App() {
             <button
               onClick={() => setCityMenuOpen(prev => !prev)}
               className={`w-full px-3 py-1 rounded-lg text-base font-bold border transition ${
-                activeTab === tab || currentView === 'prison'
+                highlightedTab === tab
                   ? 'bg-rose-600 text-white border-rose-500/20'
                   : 'bg-slate-950 text-slate-300 border-slate-800 hover:bg-slate-800 hover:text-white'
               }`}
@@ -2426,7 +2515,8 @@ export default function App() {
         );
       })}
     </div>
-  );
+    );
+  };
 
   const renderLeftUtilityMenu = () => {
     if (!user) return null;
@@ -2460,7 +2550,6 @@ export default function App() {
           onClick={() => {
             setCityMenuOpen(false);
             setActiveTab('overzicht');
-            setCurrentView('game');
             scrollDashboardToTop();
             addLog('ℹ️ Informatie knop ingedrukt.');
           }}
@@ -2979,12 +3068,81 @@ export default function App() {
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl max-w-2xl mx-auto">
             <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-4">👤 Mijn profiel</h3>
             <div className="bg-slate-950 border border-slate-850 rounded-xl p-4 space-y-2.5 text-sm">
+              <div className="flex items-center gap-3">
+                  <div className="rounded-xl border border-slate-700 overflow-hidden" style={{ width: '72px', height: '72px', background: '#0b1220' }}>
+                    {resolveProfilePhoto(stats, user?.id) ? (
+                      <img
+                        src={resolveProfilePhoto(stats, user?.id)}
+                        alt={`Profiel van ${stats?.username || 'speler'}`}
+                        style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                      />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center text-2xl font-black text-slate-300">
+                        {(stats?.username ? formatDisplayUsername(stats.username) : 'O').charAt(0).toUpperCase()}
+                      </div>
+                    )}
+                  </div>
+                  <div>
+                    <p className="text-xa text-slate-400 tracking-wider"><span style={roleNameColorStyle(userRole)}>{stats?.username ? formatDisplayUsername(stats.username) : 'Onbekend'}</span></p>
+                    <button
+                      type="button"
+                      onClick={() => setIsProfilePhotoMenuOpen((prev) => !prev)}
+                      className="mt-2 px-2 py-1 text-xs rounded-md border border-slate-700 hover:bg-slate-800"
+                    >
+                      {isProfilePhotoMenuOpen ? 'Sluit profielfoto menu' : 'Wijzig profielfoto'}
+                    </button>
+                  </div>
+                </div>
 
-              <p className="text-slate-300"><span className="text-slate-500">Gebruikersnaam:</span> <span style={roleNameColorStyle(userRole)}>{stats?.username ? formatDisplayUsername(stats.username) : 'Onbekend'}</span></p>
+                {isProfilePhotoMenuOpen && (
+                  <div className="w-full sm:w-auto sm:min-w-[320px] space-y-2">
+                    <p className="text-[11px] text-slate-500 mt-1">Gebruik een URL of upload direct een afbeelding.</p>
+                    <input
+                      type="url"
+                      value={profilePhotoDraft}
+                      onChange={(e) => {
+                        setProfilePhotoDraft(e.target.value);
+                        setProfilePhotoError('');
+                      }}
+                      placeholder="https://.../jouw-foto.jpg"
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-rose-500 transition"
+                    />
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={handleProfilePhotoFileChange}
+                        className="block w-full text-[11px] text-slate-400 file:mr-2 file:rounded-md file:border file:border-slate-700 file:bg-slate-900 file:px-2 file:py-1 file:text-[11px] file:text-slate-300"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setProfilePhotoDraft('');
+                          setProfilePhotoError('');
+                          void saveProfilePhoto('');
+                        }}
+                        className="px-2 py-1 text-xs rounded-md border border-slate-700 text-slate-300 hover:bg-slate-800"
+                      >
+                        Reset
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void saveProfilePhoto();
+                        }}
+                        className="px-2 py-1 text-xs rounded-md border border-emerald-700 text-emerald-300 hover:bg-emerald-950/30"
+                      >
+                        Opslaan
+                      </button>
+                    </div>
+                    {profilePhotoError && <p className="text-[11px] text-red-300">{profilePhotoError}</p>}
+                  </div>
+                )}
               <p className="text-slate-300"><span className="text-slate-500">Rol:</span> <span className={roleColorClass(userRole)}>{roleLabel(userRole)}</span></p>
               <p className="text-slate-300"><span className="text-slate-500">E-mail:</span> {user?.email || email || 'Onbekend'}</p>
               <p className="text-slate-300"><span className="text-slate-500">Gender:</span> {formatGenderLabel(stats?.gender)}</p>
               <p className="text-slate-300"><span className="text-slate-500">Level:</span> {stats?.level || 1}</p>
+              <p className="text-slate-300"><span className="text-slate-500">Laatst gezien:</span> {formatLastSeenLabel(stats?.last_updated, stats)}</p>
             </div>
           </div>
         </main>
@@ -3341,6 +3499,7 @@ export default function App() {
               <p className="text-slate-300"><span className="text-slate-500">Rol:</span> <span className={roleColorClass(selectedMemberProfile.role)}>{roleLabel(selectedMemberProfile.role)}</span></p>
               <p className="text-slate-300"><span className="text-slate-500">Gender:</span> {formatGenderLabel(selectedMemberProfile.gender)}</p>
               <p className="text-slate-300"><span className="text-slate-500">Level:</span> {selectedMemberProfile.level || 1}</p>
+              <p className="text-slate-300"><span className="text-slate-500">Laatst gezien:</span> {formatLastSeenLabel(selectedMemberProfile?.last_updated, selectedMemberProfile)}</p>
             </div>
           </div>
         </main>
@@ -3694,68 +3853,6 @@ if (currentView === 'settings') {
             <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-4"> ⚙️ Instellingen</h3>
             <div className="bg-slate-950 border border-slate-850 rounded-xl p-4 space-y-2.5 text-sm">
               <div className="flex flex-col sm:flex-row gap-4 sm:items-center sm:justify-between border-b border-slate-800 pb-4 mb-3">
-                <div className="flex items-center gap-3">
-                  <div className="rounded-xl border border-slate-700 overflow-hidden" style={{ width: '72px', height: '72px', background: '#0b1220' }}>
-                    {resolveProfilePhoto(stats, user?.id) ? (
-                      <img
-                        src={resolveProfilePhoto(stats, user?.id)}
-                        alt={`Profiel van ${stats?.username || 'speler'}`}
-                        style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                      />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center text-2xl font-black text-slate-300">
-                        {(stats?.username ? formatDisplayUsername(stats.username) : 'O').charAt(0).toUpperCase()}
-                      </div>
-                    )}
-                  </div>
-                  <div>
-                    <p className="text-xs text-slate-400 uppercase tracking-wider">Profielfoto</p>
-                    <p className="text-[11px] text-slate-500 mt-1">Gebruik een URL of upload direct een afbeelding.</p>
-                  </div>
-                </div>
-
-                <div className="w-full sm:w-auto sm:min-w-[320px] space-y-2">
-                  <input
-                    type="url"
-                    value={profilePhotoDraft}
-                    onChange={(e) => {
-                      setProfilePhotoDraft(e.target.value);
-                      setProfilePhotoError('');
-                    }}
-                    placeholder="https://.../jouw-foto.jpg"
-                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-rose-500 transition"
-                  />
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={handleProfilePhotoFileChange}
-                      className="block w-full text-[11px] text-slate-400 file:mr-2 file:rounded-md file:border file:border-slate-700 file:bg-slate-900 file:px-2 file:py-1 file:text-[11px] file:text-slate-300"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setProfilePhotoDraft('');
-                        setProfilePhotoError('');
-                        void saveProfilePhoto('');
-                      }}
-                      className="px-2 py-1 text-xs rounded-md border border-slate-700 text-slate-300 hover:bg-slate-800"
-                    >
-                      Reset
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        void saveProfilePhoto();
-                      }}
-                      className="px-2 py-1 text-xs rounded-md border border-emerald-700 text-emerald-300 hover:bg-emerald-950/30"
-                    >
-                      Opslaan
-                    </button>
-                  </div>
-                  {profilePhotoError && <p className="text-[11px] text-red-300">{profilePhotoError}</p>}
-                </div>
-
                 <div className="border-b border-slate-800 pb-4 mb-3">
                 <p className="text-xs text-slate-400 uppercase tracking-wider mb-2">Gebruikersnaam wijzigen</p>
                 <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
@@ -3776,7 +3873,7 @@ if (currentView === 'settings') {
                       void saveUsernameChange();
                     }}
                     disabled={usernameChangeLoading || !usernameDraft.trim()}
-                    className="px-3 py-2 text-xs rounded-md border border-rose-700 text-rose-300 hover:bg-rose-950/30 disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="px-3 py-2 text-xs rounded-md border border-rose-700 hover:bg-rose-950/30 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {usernameChangeLoading ? 'Opslaan...' : 'Opslaan gebruikersnaam'}
                   </button>
