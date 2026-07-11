@@ -721,6 +721,24 @@ export default function App() {
     void handleSendChatMessage(event);
   };
 
+  const openMemberProfile = async (member) => {
+    if (!member) return;
+
+    try {
+      const { data: profileData } = await supabase
+        .from('player_stats')
+        .select('*')
+        .eq('id', member.id)
+        .maybeSingle();
+
+      setSelectedMemberProfile(profileData ? { ...profileData, role: normalizeRole(profileData?.role) } : member);
+    } catch (_error) {
+      setSelectedMemberProfile(member);
+    }
+
+    setCurrentView('member-profile');
+  };
+
   const handleOpenChatProfile = async (messageUsername) => {
     const targetUsername = (messageUsername || '').trim();
     if (!targetUsername) return;
@@ -3205,7 +3223,21 @@ export default function App() {
                     className={`bg-slate-950 border border-slate-850 rounded-xl p-3 relative ${rankMenuOpenId === member.id ? 'z-20' : ''}`}
                   >
                     <div className="flex justify-between items-center gap-3">
-                      <div>
+                      <div
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => {
+                          void openMemberProfile(member);
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key !== 'Enter' && event.key !== ' ') return;
+                          event.preventDefault();
+                          void openMemberProfile(member);
+                        }}
+                        className="text-left min-w-0 cursor-pointer"
+                        style={{ cursor: 'pointer' }}
+                        title="Open profiel"
+                      >
                         <p className="text-sm font-semibold" style={roleNameColorStyle(member.role)}>{formatDisplayUsername(member.username || 'Onbekend')}</p>
                         <p className="text-xs text-slate-400">
                           Level {member.level || 1} • ${member.cash?.toLocaleString() || 0}
@@ -3396,20 +3428,8 @@ export default function App() {
                   return (
                   <button
                     key={member.id}
-                    onClick={async () => {
-                      try {
-                        const { data: profileData } = await supabase
-                          .from('player_stats')
-                          .select('*')
-                          .eq('id', member.id)
-                          .maybeSingle();
-
-                        setSelectedMemberProfile(profileData ? { ...profileData, role: normalizeRole(profileData?.role) } : member);
-                      } catch (_error) {
-                        setSelectedMemberProfile(member);
-                      }
-
-                      setCurrentView('member-profile');
+                    onClick={() => {
+                      void openMemberProfile(member);
                     }}
                     className="w-full text-left bg-slate-950 border border-slate-850 rounded-xl p-3 flex justify-between items-center hover:bg-slate-800 transition"
                     title="Open profiel"
@@ -3477,9 +3497,8 @@ export default function App() {
 
         <main className="flex-grow p-6">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl max-w-2xl mx-auto">
-            <h3 className="text-xs font-bold uppercase tracking-wider mb-4" style={roleNameColorStyle(selectedMemberProfile.role)}>👤 {selectedMemberName}</h3>
             <div className="bg-slate-950 border border-slate-850 rounded-xl p-4 space-y-2.5 text-sm">
-              <div className="flex items-center gap-3 border-b border-slate-800 pb-4 mb-3">
+              <div className="flex items-center gap-3 pb-4 mb-3">
                 <div className="rounded-xl border border-slate-700 overflow-hidden" style={{ width: '72px', height: '72px', background: '#0b1220' }}>
                   {selectedMemberPhoto ? (
                     <img
@@ -3493,9 +3512,9 @@ export default function App() {
                     </div>
                   )}
                 </div>
+                <p className="text-xa text-slate-400 tracking-wider"><span style={roleNameColorStyle(selectedMemberProfile.role)}>{selectedMemberName}</span></p>
               </div>
 
-              <p className="text-slate-300"><span className="text-slate-500">Gebruikersnaam:</span> <span style={roleNameColorStyle(selectedMemberProfile.role)}>{selectedMemberName}</span></p>
               <p className="text-slate-300"><span className="text-slate-500">Rol:</span> <span className={roleColorClass(selectedMemberProfile.role)}>{roleLabel(selectedMemberProfile.role)}</span></p>
               <p className="text-slate-300"><span className="text-slate-500">Gender:</span> {formatGenderLabel(selectedMemberProfile.gender)}</p>
               <p className="text-slate-300"><span className="text-slate-500">Level:</span> {selectedMemberProfile.level || 1}</p>
