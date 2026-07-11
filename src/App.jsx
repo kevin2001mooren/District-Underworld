@@ -110,6 +110,15 @@ export default function App() {
   const isChatWidgetOpenRef = useRef(false);
   const lastCloudNetworkLogAtRef = useRef(0);
   const chatProfileRequestIdRef = useRef(0);
+  const recoveryAnchorRef = useRef({
+    userId: null,
+    energyMs: Date.now(),
+    nerveMs: Date.now(),
+    lastEnergy: null,
+    lastNerve: null,
+    lastMaxEnergy: null,
+    lastMaxNerve: null
+  });
 
   const scrollChatToBottom = (remainingPasses = 4) => {
     const container = chatScrollRef.current;
@@ -1013,6 +1022,58 @@ export default function App() {
 
     return () => clearInterval(interval);
   }, [user?.id]);
+
+  useEffect(() => {
+    if (!user?.id || !stats) return;
+
+    const nowMs = Date.now();
+    const statsLastUpdatedMs = new Date(stats.last_updated || nowMs).getTime();
+    const fallbackMs = Number.isFinite(statsLastUpdatedMs) ? statsLastUpdatedMs : nowMs;
+
+    const currentEnergy = Number(stats.energy) || 0;
+    const currentNerve = Number(stats.nerve) || 0;
+    const currentMaxEnergy = Number(stats.max_energy) || 100;
+    const currentMaxNerve = Number(stats.max_nerve) || 20;
+
+    const anchor = recoveryAnchorRef.current;
+    const isNewUser = anchor.userId !== user.id;
+
+    if (isNewUser) {
+      recoveryAnchorRef.current = {
+        userId: user.id,
+        energyMs: fallbackMs,
+        nerveMs: fallbackMs,
+        lastEnergy: currentEnergy,
+        lastNerve: currentNerve,
+        lastMaxEnergy: currentMaxEnergy,
+        lastMaxNerve: currentMaxNerve
+      };
+      return;
+    }
+
+    const wasEnergyCapped =
+      anchor.lastEnergy !== null &&
+      anchor.lastMaxEnergy !== null &&
+      anchor.lastEnergy >= anchor.lastMaxEnergy;
+    const isEnergyNowBelowCap = currentEnergy < currentMaxEnergy;
+    if (wasEnergyCapped && isEnergyNowBelowCap) {
+      anchor.energyMs = nowMs;
+    }
+
+    const wasNerveCapped =
+      anchor.lastNerve !== null &&
+      anchor.lastMaxNerve !== null &&
+      anchor.lastNerve >= anchor.lastMaxNerve;
+    const isNerveNowBelowCap = currentNerve < currentMaxNerve;
+    if (wasNerveCapped && isNerveNowBelowCap) {
+      anchor.nerveMs = nowMs;
+    }
+
+    anchor.lastEnergy = currentEnergy;
+    anchor.lastNerve = currentNerve;
+    anchor.lastMaxEnergy = currentMaxEnergy;
+    anchor.lastMaxNerve = currentMaxNerve;
+  }, [user?.id, stats]);
 
   const handleProfilePhotoFileChange = (event) => {
     const file = event.target.files?.[0];
@@ -2758,26 +2819,30 @@ export default function App() {
       const currentNerve = Number(stats.nerve) || 0;
       const maxNerve = Number(stats.max_nerve) || 20;
 
-      const lastUpdatedMs = new Date(stats.last_updated || Date.now()).getTime();
-      const elapsedSeconds = Math.max(0, Math.floor((Date.now() - lastUpdatedMs) / 1000));
+      const nowMs = Date.now();
+      const energyAnchorMs = Number(recoveryAnchorRef.current.energyMs) || nowMs;
+      const nerveAnchorMs = Number(recoveryAnchorRef.current.nerveMs) || nowMs;
+
+      const elapsedEnergySeconds = Math.max(0, Math.floor((nowMs - energyAnchorMs) / 1000));
+      const elapsedNerveSeconds = Math.max(0, Math.floor((nowMs - nerveAnchorMs) / 1000));
 
       const energyAtCap = currentEnergy >= maxEnergy;
       const nerveAtCap = currentNerve >= maxNerve;
 
       const energyCountdown = energyAtCap
         ? null
-        : ENERGY_RECOVERY_INTERVAL_SECONDS - (elapsedSeconds % ENERGY_RECOVERY_INTERVAL_SECONDS || ENERGY_RECOVERY_INTERVAL_SECONDS);
+        : ENERGY_RECOVERY_INTERVAL_SECONDS - (elapsedEnergySeconds % ENERGY_RECOVERY_INTERVAL_SECONDS || ENERGY_RECOVERY_INTERVAL_SECONDS);
 
       const nerveCountdown = nerveAtCap
         ? null
-        : NERVE_RECOVERY_INTERVAL_SECONDS - (elapsedSeconds % NERVE_RECOVERY_INTERVAL_SECONDS || NERVE_RECOVERY_INTERVAL_SECONDS);
+        : NERVE_RECOVERY_INTERVAL_SECONDS - (elapsedNerveSeconds % NERVE_RECOVERY_INTERVAL_SECONDS || NERVE_RECOVERY_INTERVAL_SECONDS);
 
       setRecoveryTimers({ energy: energyCountdown, nerve: nerveCountdown });
 
       if (isSyncing || (energyAtCap && nerveAtCap)) return;
 
-      const energyGain = Math.floor(elapsedSeconds / ENERGY_RECOVERY_INTERVAL_SECONDS);
-      const nerveGain = Math.floor(elapsedSeconds / NERVE_RECOVERY_INTERVAL_SECONDS);
+      const energyGain = Math.floor(elapsedEnergySeconds / ENERGY_RECOVERY_INTERVAL_SECONDS);
+      const nerveGain = Math.floor(elapsedNerveSeconds / NERVE_RECOVERY_INTERVAL_SECONDS);
 
       if (energyGain <= 0 && nerveGain <= 0) return;
 
@@ -2785,6 +2850,13 @@ export default function App() {
       const nextNerve = Math.min(maxNerve, currentNerve + nerveGain);
 
       if (nextEnergy === currentEnergy && nextNerve === currentNerve) return;
+
+      if (!energyAtCap && energyGain > 0) {
+        recoveryAnchorRef.current.energyMs = energyAnchorMs + (energyGain * ENERGY_RECOVERY_INTERVAL_SECONDS * 1000);
+      }
+      if (!nerveAtCap && nerveGain > 0) {
+        recoveryAnchorRef.current.nerveMs = nerveAnchorMs + (nerveGain * NERVE_RECOVERY_INTERVAL_SECONDS * 1000);
+      }
 
       isSyncing = true;
       try {
