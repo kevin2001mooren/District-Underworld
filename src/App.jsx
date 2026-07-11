@@ -3952,8 +3952,8 @@ if (currentView === 'settings') {
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl max-w-3xl mx-auto">
             <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-4"> ⚙️ Instellingen</h3>
             <div className="bg-slate-950 border border-slate-850 rounded-xl p-4 space-y-2.5 text-sm">
-              <div className="flex flex-col sm:flex-row gap-4 sm:items-center sm:justify-between border-b border-slate-800 pb-4 mb-3">
-                <div className="border-b border-slate-800 pb-4 mb-3">
+              <div className="flex flex-col sm:flex-row gap-4 sm:items-center sm:justify-between pb-4 mb-3">
+                <div className="pb-4 mb-3">
                 <p className="text-xs text-slate-400 uppercase tracking-wider mb-2">Gebruikersnaam wijzigen</p>
                 <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
                   <input
