@@ -8,6 +8,7 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 const APP_PUBLIC_URL = "https://district-underworld.vercel.app/";
 const DEFAULT_MALE_PROFILE_PHOTO = '/default-male-profile.jpeg';
 const DEFAULT_FEMALE_PROFILE_PHOTO = '/default-female-profile.jpeg';
+const DEFAULT_OTHER_PROFILE_PHOTO = '/default-other-profile.jpeg';
 
 const getEmailRedirectUrl = () => {
   const host = window.location.hostname;
@@ -472,6 +473,8 @@ export default function App() {
       const genderValue = String(playerStats?.gender || '').trim().toLowerCase();
       if (genderValue === 'vrouw' || genderValue === 'female') return DEFAULT_FEMALE_PROFILE_PHOTO;
       if (genderValue === 'man' || genderValue === 'male') return DEFAULT_MALE_PROFILE_PHOTO;
+      if (genderValue === 'anders' || genderValue === 'other') return DEFAULT_OTHER_PROFILE_PHOTO;
+      if (genderValue === 'liever-niet-zeggen' || genderValue === 'prefer-not-to-say') return DEFAULT_OTHER_PROFILE_PHOTO;
       return '';
     }
 
@@ -488,7 +491,13 @@ export default function App() {
       return DEFAULT_MALE_PROFILE_PHOTO;
     }
 
-    return '';
+    if (genderValue === 'anders' || genderValue === 'other') {
+      return DEFAULT_OTHER_PROFILE_PHOTO;
+    }
+
+    if (genderValue === 'liever-niet-zeggen' || genderValue === 'prefer-not-to-say') {
+      return DEFAULT_OTHER_PROFILE_PHOTO;
+    }
   };
 
   const formatCountdown = (totalSeconds) => {
