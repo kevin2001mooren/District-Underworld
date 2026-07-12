@@ -2851,7 +2851,21 @@ export default function App() {
             </div>
 
             <div className="min-w-0 flex-1">
-              <p className="text-lg font-black leading-tight truncate" style={roleNameColorStyle(userRole)}>{usernameLabel}</p>
+              <span
+                role="button"
+                tabIndex={0}
+                onClick={() => setCurrentView('profile')}
+                onKeyDown={(event) => {
+                  if (event.key !== 'Enter' && event.key !== ' ') return;
+                  event.preventDefault();
+                  setCurrentView('profile');
+                }}
+                className="text-lg font-black leading-tight truncate outline-none text-left cursor-pointer"
+                style={{ ...roleNameColorStyle(userRole), cursor: 'pointer' }}
+                title="Open mijn profiel"
+              >
+                {usernameLabel}
+              </span>
               <p className="text-xs mt-0.5 leading-tight text-slate-400">LVL {stats?.level || 1}</p>
               <p className="text-xs text-emerald-400 font-mono mt-0.5 leading-tight">${stats?.cash?.toLocaleString() || 0}</p>
             </div>
@@ -3743,13 +3757,6 @@ export default function App() {
               </button>
             )}
             <button
-              onClick={() => setCurrentView('profile')}
-              className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
-              title="Toon mijn profiel"
-            >
-              Mijn profiel
-            </button>
-            <button
               onClick={() => setCurrentView('members')}
               className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
               title="Toon leden"
@@ -3835,13 +3842,6 @@ export default function App() {
               </button>
             )}
             <button
-              onClick={() => setCurrentView('profile')}
-              className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
-              title="Toon mijn profiel"
-            >
-              Mijn profiel
-            </button>
-            <button
               onClick={() => setCurrentView('members')}
               className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
               title="Toon leden"
@@ -3911,13 +3911,6 @@ export default function App() {
                 Admin
               </button>
             )}
-            <button
-              onClick={() => setCurrentView('profile')}
-              className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
-              title="Toon mijn profiel"
-            >
-              Mijn profiel
-            </button>
             <button
               onClick={() => setCurrentView('members')}
               className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
@@ -4049,13 +4042,6 @@ if (currentView === 'helpdesk') {
               </button>
             )}
             <button
-              onClick={() => setCurrentView('profile')}
-              className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
-              title="Toon mijn profiel"
-            >
-              Mijn profiel
-            </button>
-            <button
               onClick={() => setCurrentView('members')}
               className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
               title="Toon leden"
@@ -4170,13 +4156,6 @@ if (currentView === 'settings') {
               </button>
             )}
             <button
-              onClick={() => setCurrentView('profile')}
-              className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
-              title="Toon mijn profiel"
-            >
-              Mijn profiel
-            </button>
-            <button
               onClick={() => setCurrentView('members')}
               className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
               title="Toon leden"
@@ -4249,13 +4228,6 @@ if (currentView === 'information') {
               </button>
             )}
             <button
-              onClick={() => setCurrentView('profile')}
-              className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
-              title="Toon mijn profiel"
-            >
-              Mijn profiel
-            </button>
-            <button
               onClick={() => setCurrentView('members')}
               className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
               title="Toon leden"
@@ -4323,13 +4295,6 @@ if (currentView === 'information') {
                 Admin
               </button>
             )}
-          <button
-            onClick={() => setCurrentView('profile')}
-            className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
-            title="Toon mijn profiel"
-          >
-            Mijn profiel
-          </button>
           <button
             onClick={() => setCurrentView('members')}
             className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
