@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import './Game.css';
 import { createClient } from '@supabase/supabase-js';
-import { Shield, Skull, Zap, Swords, Coins, User, Lock, Loader2, Award, Clock } from 'lucide-react';
+import { Shield, Skull, Zap, Swords, Coins, User, Lock, Loader2, Award, Clock, Mail } from 'lucide-react';
 const SUPABASE_URL = "https://utqwbqymcbgoqunpjfff.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InV0cXdicXltY2Jnb3F1bnBqZmZmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMTAyMTUsImV4cCI6MjA5ODc4NjIxNX0.jirvlYKUSSmXDT-OC50zOR5TKVYEwT8NFAIFOBGhxSY";
 const APP_PUBLIC_URL = "https://district-underworld.vercel.app/";
@@ -108,6 +108,16 @@ export default function App() {
   const [helpdeskMessage, setHelpdeskMessage] = useState('');
   const [helpdeskSending, setHelpdeskSending] = useState(false);
   const [helpdeskLastSentKey, setHelpdeskLastSentKey] = useState('');
+  const [inboxMessages, setInboxMessages] = useState([]);
+  const [inboxContacts, setInboxContacts] = useState([]);
+  const [inboxLoading, setInboxLoading] = useState(false);
+  const [inboxError, setInboxError] = useState('');
+  const [inboxFilter, setInboxFilter] = useState('received');
+  const [inboxRecipientId, setInboxRecipientId] = useState('');
+  const [inboxSubject, setInboxSubject] = useState('');
+  const [inboxBody, setInboxBody] = useState('');
+  const [inboxSending, setInboxSending] = useState(false);
+  const [inboxUnreadCount, setInboxUnreadCount] = useState(0);
   const dashboardScrollRef = useRef(null);
   const chatScrollRef = useRef(null);
   const shouldAutoScrollChatRef = useRef(true);
@@ -971,6 +981,121 @@ export default function App() {
       showActionNotice(`Automatisch verzenden mislukt: ${error?.message || 'onbekende fout'}`, 'error');
     } finally {
       setHelpdeskSending(false);
+    }
+  };
+
+  const refreshInboxData = async () => {
+    if (!user?.id) return;
+
+    setInboxLoading(true);
+    setInboxError('');
+
+    try {
+      const [messagesResult, contactsResult] = await Promise.all([
+        supabase
+          .from('private_messages')
+          .select('id, sender_id, sender_username, recipient_id, recipient_username, subject, content, created_at')
+          .or(`recipient_id.eq.${user.id},sender_id.eq.${user.id}`)
+          .order('created_at', { ascending: false })
+          .limit(250),
+        supabase
+          .from('player_stats')
+          .select('id, username, role')
+          .neq('id', user.id)
+          .order('username', { ascending: true })
+          .limit(500)
+      ]);
+
+      if (messagesResult.error) throw messagesResult.error;
+      if (contactsResult.error) throw contactsResult.error;
+
+      setInboxMessages(messagesResult.data || []);
+      setInboxContacts((contactsResult.data || []).map((member) => ({
+        ...member,
+        role: normalizeRole(member?.role)
+      })));
+    } catch (error) {
+      const message = String(error?.message || 'onbekende fout');
+      const missingTable = message.toLowerCase().includes('private_messages');
+
+      setInboxMessages([]);
+      setInboxContacts([]);
+      setInboxError(
+        missingTable
+          ? 'Inbox is nog niet beschikbaar. Tabel private_messages ontbreekt nog in Supabase.'
+          : `Inbox laden mislukt: ${message}`
+      );
+    } finally {
+      setInboxLoading(false);
+    }
+  };
+
+  const openInboxComposeForMember = (member) => {
+    if (!member?.id || !user?.id) return;
+    if (member.id === user.id) return;
+
+    setInboxRecipientId(String(member.id));
+    setInboxSubject('');
+    setInboxBody('');
+    setInboxFilter('sent');
+    setCurrentView('inbox');
+  };
+
+  const handleSendPrivateMessage = async () => {
+    if (!user?.id || inboxSending) return;
+
+    const recipientId = String(inboxRecipientId || '').trim();
+    const subjectValue = String(inboxSubject || '').trim();
+    const contentValue = String(inboxBody || '').trim();
+
+    if (!recipientId) {
+      showActionNotice('Kies eerst een ontvanger.', 'error');
+      return;
+    }
+
+    if (!subjectValue) {
+      showActionNotice('Vul eerst een onderwerp in.', 'error');
+      return;
+    }
+
+    if (contentValue.length < 2) {
+      showActionNotice('Vul een bericht in.', 'error');
+      return;
+    }
+
+    const recipient = inboxContacts.find((member) => String(member.id) === recipientId);
+    if (!recipient) {
+      showActionNotice('Ontvanger niet gevonden. Vernieuw de inbox en probeer opnieuw.', 'error');
+      return;
+    }
+
+    const senderUsername = stats?.username || loginUsername || user?.email?.split('@')[0] || 'Onbekend';
+
+    try {
+      setInboxSending(true);
+
+      const { error } = await supabase
+        .from('private_messages')
+        .insert([{
+          sender_id: user.id,
+          sender_username: senderUsername,
+          recipient_id: recipient.id,
+          recipient_username: recipient.username,
+          subject: subjectValue,
+          content: contentValue
+        }]);
+
+      if (error) throw error;
+
+      showActionNotice('Prive bericht verzonden.', 'success');
+      setInboxSubject('');
+      setInboxBody('');
+      setInboxFilter('sent');
+      await refreshInboxData();
+    } catch (error) {
+      showActionNotice(`Prive bericht verzenden mislukt: ${error?.message || 'onbekende fout'}`, 'error');
+    } finally {
+      setInboxSending(false);
     }
   };
 
@@ -2724,6 +2849,16 @@ export default function App() {
           className="left-utility-item"
           onClick={() => {
             setCityMenuOpen(false);
+            setCurrentView('inbox');
+          }}
+        >
+          Inbox{inboxUnreadCount > 0 ? ` (${inboxUnreadCount})` : ''}
+        </button>
+        <button
+          type="button"
+          className="left-utility-item"
+          onClick={() => {
+            setCityMenuOpen(false);
             setCurrentView('helpdesk');
           }}
         >
@@ -2851,21 +2986,47 @@ export default function App() {
             </div>
 
             <div className="min-w-0 flex-1">
-              <span
-                role="button"
-                tabIndex={0}
-                onClick={() => setCurrentView('profile')}
-                onKeyDown={(event) => {
-                  if (event.key !== 'Enter' && event.key !== ' ') return;
-                  event.preventDefault();
-                  setCurrentView('profile');
-                }}
-                className="text-lg font-black leading-tight truncate outline-none text-left cursor-pointer"
-                style={{ ...roleNameColorStyle(userRole), cursor: 'pointer' }}
-                title="Open mijn profiel"
-              >
-                {usernameLabel}
-              </span>
+              <div className="flex items-center justify-between gap-2">
+                <span
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => setCurrentView('profile')}
+                  onKeyDown={(event) => {
+                    if (event.key !== 'Enter' && event.key !== ' ') return;
+                    event.preventDefault();
+                    setCurrentView('profile');
+                  }}
+                  className="text-lg font-black leading-tight truncate outline-none text-left cursor-pointer"
+                  style={{ ...roleNameColorStyle(userRole), cursor: 'pointer' }}
+                  title="Open mijn profiel"
+                >
+                  {usernameLabel}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setCurrentView('inbox')}
+                  className="relative p-1 rounded-md border border-slate-700 text-slate-300 bg-slate-800 hover:text-white transition"
+                  title="Open inbox"
+                  aria-label="Open inbox"
+                >
+                  <Mail className="h-3.5 w-3.5" />
+                  {inboxUnreadCount > 0 && (
+                    <span
+                      className="rounded-full"
+                      style={{
+                        position: 'absolute',
+                        top: '-3px',
+                        right: '-3px',
+                        width: '8px',
+                        height: '8px',
+                        backgroundColor: '#ef4444',
+                        border: '1px solid rgba(255,255,255,0.45)'
+                      }}
+                      title="Nieuwe priveberichten"
+                    />
+                  )}
+                </button>
+              </div>
               <p className="text-xs mt-0.5 leading-tight text-slate-400">LVL {stats?.level || 1}</p>
               <p className="text-xs text-emerald-400 font-mono mt-0.5 leading-tight">${stats?.cash?.toLocaleString() || 0}</p>
             </div>
@@ -3021,6 +3182,65 @@ export default function App() {
     const timer = setTimeout(() => setAdminNotice(null), 3500);
     return () => clearTimeout(timer);
   }, [adminNotice]);
+
+  useEffect(() => {
+    if (currentView !== 'inbox' || !user?.id) return;
+    void refreshInboxData();
+  }, [currentView, user?.id]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const ownId = String(user.id);
+    const channel = supabase
+      .channel(`private-messages-live-${ownId}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'private_messages' },
+        (payload) => {
+          const incoming = payload.new;
+          if (!incoming?.id) return;
+
+          const senderId = String(incoming.sender_id || '');
+          const recipientId = String(incoming.recipient_id || '');
+          const isParticipant = senderId === ownId || recipientId === ownId;
+          if (!isParticipant) return;
+
+          setInboxMessages((prev) => {
+            if (prev.some((message) => message.id === incoming.id)) return prev;
+            return [incoming, ...prev].slice(0, 250);
+          });
+
+          setInboxContacts((prev) => {
+            if (senderId === ownId) return prev;
+            if (!senderId || prev.some((member) => String(member.id) === senderId)) return prev;
+            return [
+              ...prev,
+              {
+                id: senderId,
+                username: incoming.sender_username || 'Onbekend',
+                role: 'lid'
+              }
+            ];
+          });
+
+          const isIncomingForCurrentUser = recipientId === ownId && senderId !== ownId;
+          if (isIncomingForCurrentUser && currentView !== 'inbox') {
+            setInboxUnreadCount((prev) => prev + 1);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user?.id, currentView]);
+
+  useEffect(() => {
+    if (currentView !== 'inbox') return;
+    setInboxUnreadCount(0);
+  }, [currentView]);
 
   useEffect(() => {
     if (!user) return;
@@ -3730,6 +3950,16 @@ export default function App() {
               <p className="text-slate-300"><span className="text-slate-500">Gender:</span> {formatGenderLabel(selectedMemberProfile.gender)}</p>
               <p className="text-slate-300"><span className="text-slate-500">Level:</span> {selectedMemberProfile.level || 1}</p>
               <p className="text-slate-300"><span className="text-slate-500">Laatst gezien:</span> {formatLastSeenLabel(selectedMemberProfile?.last_updated, selectedMemberProfile)}</p>
+
+              {selectedMemberProfile?.id && selectedMemberProfile.id !== user?.id && (
+                <button
+                  type="button"
+                  onClick={() => openInboxComposeForMember(selectedMemberProfile)}
+                  className="mt-2 px-3 py-2 text-xs rounded-lg border border-sky-700 text-sky-300 hover:bg-sky-950/30"
+                >
+                  Stuur prive bericht
+                </button>
+              )}
             </div>
           </div>
         </main>
@@ -4007,6 +4237,187 @@ export default function App() {
                             </button>
                           </div>
                         </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        </main>
+        {renderLeftUtilityMenu()}
+        {renderLiveChatWidget()}
+      </div>
+    );
+  }
+
+if (currentView === 'inbox') {
+    const ownId = String(user?.id || '');
+    const filteredMessages = inboxMessages.filter((message) => {
+      const isReceived = String(message?.recipient_id || '') === ownId;
+      return inboxFilter === 'received' ? isReceived : !isReceived;
+    });
+
+    const selectedRecipient = inboxContacts.find((member) => String(member.id) === String(inboxRecipientId || ''));
+
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans app-with-left-utility">
+        <header className="bg-slate-900 border-b border-slate-800 py-4 px-6 flex flex-wrap justify-between items-center gap-4">
+          <div className="flex items-center gap-3">
+            {renderHeaderPlayerInfo()}
+          </div>
+          <div className="flex items-center gap-2">
+            {canOpenStaffPanel && (
+              <button
+                onClick={() => setCurrentView('admin')}
+                className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
+                title="Open admin functies"
+              >
+                Admin
+              </button>
+            )}
+            <button
+              onClick={() => setCurrentView('members')}
+              className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
+              title="Toon leden"
+            >
+              Leden
+            </button>
+          </div>
+        </header>
+
+        {renderTopTabs()}
+
+        <main className="flex-grow p-6">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl max-w-4xl mx-auto space-y-4">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">📨 Inbox</h3>
+
+            {actionNotice && (
+              <div className={`rounded-xl border p-3 text-xs ${actionNotice.type === 'error' ? 'bg-red-950/30 border-red-800/40 text-red-200' : 'bg-emerald-950/30 border-emerald-800/40 text-emerald-200'}`}>
+                {actionNotice.text}
+              </div>
+            )}
+
+            <div className="rounded-xl border border-slate-800 bg-slate-950 p-4 space-y-3">
+              <p className="text-sm font-semibold text-slate-200">Nieuw prive bericht</p>
+
+              <div className="grid gap-2">
+                <label className="text-[11px] text-slate-400" htmlFor="inbox-recipient">Ontvanger</label>
+                <select
+                  id="inbox-recipient"
+                  value={inboxRecipientId}
+                  onChange={(e) => setInboxRecipientId(e.target.value)}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-rose-500"
+                >
+                  <option value="">Kies een speler</option>
+                  {inboxContacts.map((member) => (
+                    <option key={member.id} value={member.id}>{formatDisplayUsername(member.username || 'Onbekend')}</option>
+                  ))}
+                </select>
+                {selectedRecipient && (
+                  <p className="text-[11px] text-slate-500">
+                    Geselecteerd: <span className={roleColorClass(selectedRecipient.role)}>{formatDisplayUsername(selectedRecipient.username || 'Onbekend')}</span>
+                  </p>
+                )}
+              </div>
+
+              <div className="grid gap-2">
+                <label className="text-[11px] text-slate-400" htmlFor="inbox-subject">Onderwerp</label>
+                <input
+                  id="inbox-subject"
+                  type="text"
+                  value={inboxSubject}
+                  onChange={(e) => setInboxSubject(e.target.value)}
+                  placeholder="Onderwerp"
+                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-rose-500"
+                />
+              </div>
+
+              <div className="grid gap-2">
+                <label className="text-[11px] text-slate-400" htmlFor="inbox-body">Bericht</label>
+                <textarea
+                  id="inbox-body"
+                  value={inboxBody}
+                  onChange={(e) => setInboxBody(e.target.value)}
+                  rows={5}
+                  placeholder="Typ je bericht..."
+                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-rose-500 resize-y"
+                />
+              </div>
+
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    void handleSendPrivateMessage();
+                  }}
+                  disabled={inboxSending}
+                  className="px-3 py-2 text-xs rounded-lg border border-emerald-700 text-emerald-300 hover:bg-emerald-950/30 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {inboxSending ? 'Verzenden...' : 'Verstuur prive bericht'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void refreshInboxData();
+                  }}
+                  disabled={inboxLoading}
+                  className="px-3 py-2 text-xs rounded-lg border border-slate-700 text-slate-300 hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Vernieuw inbox
+                </button>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-slate-800 bg-slate-950 p-4 space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-sm font-semibold text-slate-200">Berichten</p>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setInboxFilter('received')}
+                    className={`px-2 py-1 text-xs rounded border ${inboxFilter === 'received' ? 'border-rose-600 text-rose-300 bg-rose-950/20' : 'border-slate-700 text-slate-300 hover:bg-slate-800'}`}
+                  >
+                    Ontvangen
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setInboxFilter('sent')}
+                    className={`px-2 py-1 text-xs rounded border ${inboxFilter === 'sent' ? 'border-rose-600 text-rose-300 bg-rose-950/20' : 'border-slate-700 text-slate-300 hover:bg-slate-800'}`}
+                  >
+                    Verzonden
+                  </button>
+                </div>
+              </div>
+
+              {inboxLoading ? (
+                <p className="text-xs text-slate-400">Inbox laden...</p>
+              ) : inboxError ? (
+                <div className="rounded-lg border border-red-800/40 bg-red-950/20 text-red-200 px-3 py-2 text-xs">
+                  {inboxError}
+                </div>
+              ) : filteredMessages.length === 0 ? (
+                <p className="text-xs text-slate-500">Nog geen berichten in deze map.</p>
+              ) : (
+                <div className="space-y-2.5">
+                  {filteredMessages.map((message) => {
+                    const isReceived = String(message?.recipient_id || '') === ownId;
+                    const actor = isReceived ? message?.sender_username : message?.recipient_username;
+                    const actorLabel = formatDisplayUsername(actor || 'Onbekend');
+                    const createdLabel = message?.created_at
+                      ? new Date(message.created_at).toLocaleString([], { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+                      : 'Onbekend';
+
+                    return (
+                      <div key={message.id} className="rounded-lg border border-slate-800 bg-slate-900/30 p-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-xs font-semibold text-slate-200">{message.subject || '(geen onderwerp)'}</p>
+                          <span className="text-[11px] text-slate-500">{createdLabel}</span>
+                        </div>
+                        <p className="text-[11px] text-slate-400 mt-0.5">
+                          {isReceived ? 'Van' : 'Naar'}: {actorLabel}
+                        </p>
+                        <p className="text-xs text-slate-300 mt-2 whitespace-pre-wrap break-words">{message.content || ''}</p>
                       </div>
                     );
                   })}
