@@ -332,6 +332,7 @@ button:focus-visible {
 .bg-slate-800 { background-color: #262626; }
 .bg-rose-600 { background-color: #972828; }
 .bg-red-950\/40 { background-color: rgba(79, 20, 20, 0.4); }
+.bg-rose-950\/30 { background-color: rgba(79, 20, 20, 0.3); }
 .bg-rose-500\/10 { background-color: rgba(143, 29, 29, 0.1); }
 .bg-rose-500\/5 { background-color: rgba(143, 29, 29, 0.06); }
 .bg-amber-550\/10 { background-color: rgba(212, 175, 55, 0.13); }
@@ -340,6 +341,7 @@ button:focus-visible {
 .border-slate-850 { border-color: #2a2a2a; }
 .border-slate-850\/80 { border-color: rgba(42, 42, 42, 0.8); }
 .border-slate-800 { border-color: #313131; }
+.border-slate-700 { border-color: #3f3f3f; }
 .border-slate-800\/60 { border-color: rgba(49, 49, 49, 0.6); }
 .border-rose-500\/20 { border-color: rgba(143, 29, 29, 0.35); }
 .border-red-800\/40 { border-color: rgba(153, 27, 27, 0.4); }
@@ -407,6 +409,7 @@ button:focus-visible {
 .hover\:bg-slate-800:hover { background-color: #262626; }
 .hover\:bg-rose-500:hover { background-color: #ad3434; }
 .hover\:bg-rose-950\/20:hover { background-color: rgba(79, 20, 20, 0.2); }
+.hover\:bg-rose-950\/30:hover { background-color: rgba(79, 20, 20, 0.3); }
 .hover\:underline:hover { text-decoration: underline; }
 .hover\:text-white:hover { color: #fff; }
 .hover\:border-rose-900\/40:hover { border-color: rgba(99, 20, 20, 0.4); }
@@ -436,6 +439,7 @@ button:focus-visible {
 }
 
 .border-slate-800,
+.border-slate-700,
 .border-slate-850,
 .border-slate-800\/60,
 .border-slate-850\/80 {

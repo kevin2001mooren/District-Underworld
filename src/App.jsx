@@ -9,6 +9,8 @@ const APP_PUBLIC_URL = "https://district-underworld.vercel.app/";
 const DEFAULT_MALE_PROFILE_PHOTO = '/default-male-profile.jpeg';
 const DEFAULT_FEMALE_PROFILE_PHOTO = '/default-female-profile.jpeg';
 const DEFAULT_OTHER_PROFILE_PHOTO = '/default-other-profile.jpeg';
+const INBOX_META_SUBJECT = '__DU_INBOX_META__';
+const INBOX_META_VERSION = 1;
 
 const getEmailRedirectUrl = () => {
   const host = window.location.hostname;
@@ -119,6 +121,8 @@ export default function App() {
   const [inboxSending, setInboxSending] = useState(false);
   const [isInboxComposeOpen, setIsInboxComposeOpen] = useState(false);
   const [inboxBlockedUserIds, setInboxBlockedUserIds] = useState([]);
+  const [inboxDeletedMessageIds, setInboxDeletedMessageIds] = useState([]);
+  const [inboxReportFallbackEntries, setInboxReportFallbackEntries] = useState([]);
   const [inboxMessageActionId, setInboxMessageActionId] = useState('');
   const [inboxMessageActionType, setInboxMessageActionType] = useState('');
   const [inboxUnreadCount, setInboxUnreadCount] = useState(0);
@@ -132,6 +136,9 @@ export default function App() {
   const isChatWidgetOpenRef = useRef(false);
   const lastCloudNetworkLogAtRef = useRef(0);
   const chatProfileRequestIdRef = useRef(0);
+  const inboxMetaMessageIdRef = useRef('');
+  const inboxMetaHydratedRef = useRef(false);
+  const inboxMetaLastSavedPayloadRef = useRef('');
   const recoveryAnchorRef = useRef({
     userId: null,
     energyMs: Date.now(),
@@ -991,6 +998,186 @@ export default function App() {
 
   const getInboxBlockedStorageKey = (playerId) => `district-underworld-inbox-blocked-${playerId}`;
   const getInboxReportsStorageKey = (playerId) => `district-underworld-inbox-reports-${playerId}`;
+  const getInboxDeletedStorageKey = (playerId) => `district-underworld-inbox-deleted-${playerId}`;
+
+  const normalizeIdList = (values) => {
+    const source = Array.isArray(values) ? values : [];
+    return Array.from(new Set(source.map((value) => String(value || '').trim()).filter(Boolean)));
+  };
+
+  const normalizeInboxReports = (values) => {
+    const source = Array.isArray(values) ? values : [];
+    const normalized = source
+      .filter((entry) => entry && typeof entry === 'object')
+      .map((entry) => ({
+        id: String(entry.id || '').trim(),
+        reportedAt: entry.reportedAt || new Date().toISOString(),
+        reporterId: entry.reporterId || null,
+        senderId: entry.senderId || null,
+        senderUsername: String(entry.senderUsername || '').trim() || 'Onbekend',
+        subject: String(entry.subject || ''),
+        content: String(entry.content || '')
+      }))
+      .filter((entry) => entry.id);
+
+    const deduped = [];
+    const seen = new Set();
+
+    normalized.forEach((entry) => {
+      const key = `${entry.id}::${entry.reportedAt}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      deduped.push(entry);
+    });
+
+    return deduped.slice(0, 100);
+  };
+
+  const readJsonArrayFromStorage = (storageKey) => {
+    try {
+      const raw = window.localStorage.getItem(storageKey);
+      const parsed = JSON.parse(raw || '[]');
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (_error) {
+      return [];
+    }
+  };
+
+  const writeJsonArrayToStorage = (storageKey, values) => {
+    try {
+      if (!Array.isArray(values) || values.length === 0) {
+        window.localStorage.removeItem(storageKey);
+        return;
+      }
+      window.localStorage.setItem(storageKey, JSON.stringify(values));
+    } catch (_error) {
+      // Lokale opslag is alleen fallback en mag geen appflow blokkeren.
+    }
+  };
+
+  const buildInboxMetaPayload = (blockedIds, deletedIds, reports) => {
+    return JSON.stringify({
+      version: INBOX_META_VERSION,
+      blockedUserIds: normalizeIdList(blockedIds),
+      deletedMessageIds: normalizeIdList(deletedIds),
+      reports: normalizeInboxReports(reports)
+    });
+  };
+
+  const parseInboxMetaPayload = (rawContent) => {
+    try {
+      const parsed = JSON.parse(String(rawContent || '{}'));
+      return {
+        blockedUserIds: normalizeIdList(parsed?.blockedUserIds),
+        deletedMessageIds: normalizeIdList(parsed?.deletedMessageIds),
+        reports: normalizeInboxReports(parsed?.reports)
+      };
+    } catch (_error) {
+      return {
+        blockedUserIds: [],
+        deletedMessageIds: [],
+        reports: []
+      };
+    }
+  };
+
+  const isInboxMetaMessage = (message) => {
+    return String(message?.subject || '').trim() === INBOX_META_SUBJECT;
+  };
+
+  const persistInboxMetaToCloud = async (playerId, blockedIds, deletedIds, reports) => {
+    if (!playerId) return false;
+
+    const payload = buildInboxMetaPayload(blockedIds, deletedIds, reports);
+    if (payload === inboxMetaLastSavedPayloadRef.current) {
+      return true;
+    }
+
+    const knownMetaId = String(inboxMetaMessageIdRef.current || '').trim();
+
+    if (knownMetaId) {
+      const { data, error } = await supabase
+        .from('private_messages')
+        .update({
+          content: payload,
+          sender_username: 'System',
+          recipient_username: 'System'
+        })
+        .eq('id', knownMetaId)
+        .eq('sender_id', playerId)
+        .eq('recipient_id', playerId)
+        .eq('subject', INBOX_META_SUBJECT)
+        .select('id')
+        .maybeSingle();
+
+      if (!error && data?.id) {
+        inboxMetaMessageIdRef.current = String(data.id);
+        inboxMetaLastSavedPayloadRef.current = payload;
+        return true;
+      }
+    }
+
+    const { data: insertedData, error: insertError } = await supabase
+      .from('private_messages')
+      .insert([{
+        sender_id: playerId,
+        sender_username: 'System',
+        recipient_id: playerId,
+        recipient_username: 'System',
+        subject: INBOX_META_SUBJECT,
+        content: payload
+      }])
+      .select('id')
+      .single();
+
+    if (insertError || !insertedData?.id) {
+      return false;
+    }
+
+    inboxMetaMessageIdRef.current = String(insertedData.id);
+    inboxMetaLastSavedPayloadRef.current = payload;
+    return true;
+  };
+
+  const loadInboxMetaForUser = async (playerId, localBlocked, localDeleted, localReports) => {
+    if (!playerId) return;
+
+    const { data, error } = await supabase
+      .from('private_messages')
+      .select('id, content, created_at')
+      .eq('sender_id', playerId)
+      .eq('recipient_id', playerId)
+      .eq('subject', INBOX_META_SUBJECT)
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    if (error) {
+      throw error;
+    }
+
+    const latestMeta = Array.isArray(data) && data.length > 0 ? data[0] : null;
+    const cloudMeta = parseInboxMetaPayload(latestMeta?.content || '{}');
+
+    inboxMetaMessageIdRef.current = latestMeta?.id ? String(latestMeta.id) : '';
+
+    const mergedBlocked = normalizeIdList([...localBlocked, ...cloudMeta.blockedUserIds]);
+    const mergedDeleted = normalizeIdList([...localDeleted, ...cloudMeta.deletedMessageIds]);
+    const mergedReports = normalizeInboxReports([...localReports, ...cloudMeta.reports]);
+
+    setInboxBlockedUserIds(mergedBlocked);
+    setInboxDeletedMessageIds(mergedDeleted);
+    setInboxReportFallbackEntries(mergedReports);
+
+    const mergedPayload = buildInboxMetaPayload(mergedBlocked, mergedDeleted, mergedReports);
+    inboxMetaLastSavedPayloadRef.current = mergedPayload;
+
+    if (!latestMeta && (mergedBlocked.length > 0 || mergedDeleted.length > 0 || mergedReports.length > 0)) {
+      const saved = await persistInboxMetaToCloud(playerId, mergedBlocked, mergedDeleted, mergedReports);
+      if (!saved) {
+        addLog('⚠️ Inbox voorkeuren konden niet naar cloud worden gesynchroniseerd; lokale fallback blijft actief.', 'info');
+      }
+    }
+  };
 
   const refreshInboxData = async () => {
     if (!user?.id) return;
@@ -1017,7 +1204,7 @@ export default function App() {
       if (messagesResult.error) throw messagesResult.error;
       if (contactsResult.error) throw contactsResult.error;
 
-      const loadedMessages = messagesResult.data || [];
+      const loadedMessages = (messagesResult.data || []).filter((message) => !isInboxMetaMessage(message));
       setInboxMessages(loadedMessages);
       const latestIncoming = loadedMessages.find((message) => String(message?.recipient_id || '') === String(user.id));
       inboxLatestIncomingIdRef.current = latestIncoming?.id ? String(latestIncoming.id) : inboxLatestIncomingIdRef.current;
@@ -1126,10 +1313,14 @@ export default function App() {
 
       if (error) throw error;
 
+      setInboxDeletedMessageIds((prev) => Array.from(new Set([...prev.map((value) => String(value)), normalizedId])));
       setInboxMessages((prev) => prev.filter((message) => String(message?.id || '') !== normalizedId));
       showActionNotice('Bericht verwijderd.', 'success');
     } catch (error) {
-      showActionNotice(`Bericht verwijderen mislukt: ${error?.message || 'onbekende fout'}`, 'error');
+      // Fallback: verberg lokaal zodat het bericht niet terugkomt na refresh.
+      setInboxDeletedMessageIds((prev) => Array.from(new Set([...prev.map((value) => String(value)), normalizedId])));
+      setInboxMessages((prev) => prev.filter((message) => String(message?.id || '') !== normalizedId));
+      showActionNotice('Bericht lokaal verborgen. Database verwijderen is mislukt.', 'info');
     } finally {
       setInboxMessageActionId('');
       setInboxMessageActionType('');
@@ -1172,19 +1363,14 @@ export default function App() {
       if (error) throw error;
       savedToDatabase = true;
     } catch (error) {
-      addLog(`⚠️ Inbox melding niet in database opgeslagen (${error?.message || 'onbekende fout'}). Lokale fallback gebruikt.`, 'info');
+      const message = String(error?.message || '').toLowerCase();
+      const missingReportsTable = message.includes("private_message_reports") && message.includes('could not find the table');
+      if (!missingReportsTable) {
+        addLog(`⚠️ Inbox melding niet in database opgeslagen (${error?.message || 'onbekende fout'}). Lokale fallback gebruikt.`, 'info');
+      }
     }
 
-    try {
-      if (user?.id) {
-        const storageKey = getInboxReportsStorageKey(user.id);
-        const existing = JSON.parse(window.localStorage.getItem(storageKey) || '[]');
-        const next = [fallbackEntry, ...(Array.isArray(existing) ? existing : [])].slice(0, 100);
-        window.localStorage.setItem(storageKey, JSON.stringify(next));
-      }
-    } catch (_storageError) {
-      // Lokale fallback is optioneel; melding in UI blijft wel zichtbaar.
-    }
+    setInboxReportFallbackEntries((prev) => normalizeInboxReports([fallbackEntry, ...prev]));
 
     showActionNotice(savedToDatabase ? 'Bericht gemeld bij staff.' : 'Bericht gemeld (lokaal opgeslagen).', 'success');
     setInboxMessageActionId('');
@@ -1206,6 +1392,20 @@ export default function App() {
     }
 
     showActionNotice(`${formatDisplayUsername(targetUsername || 'Gebruiker')} is geblokkeerd.`, 'success');
+  };
+
+  const handleUnblockInboxUser = (targetUserId, targetUsername) => {
+    const normalizedId = String(targetUserId || '').trim();
+    if (!normalizedId) return;
+
+    setInboxBlockedUserIds((prev) => prev.filter((value) => String(value || '').trim() !== normalizedId));
+    showActionNotice(`${formatDisplayUsername(targetUsername || 'Gebruiker')} is gedeblokkeerd.`, 'success');
+  };
+
+  const handleClearInboxBlocks = () => {
+    if (inboxBlockedUserIds.length === 0) return;
+    setInboxBlockedUserIds([]);
+    showActionNotice('Alle inbox-blokkades zijn verwijderd.', 'success');
   };
 
   const formatAmountWithDots = (value) => {
@@ -3318,6 +3518,7 @@ export default function App() {
         (payload) => {
           const incoming = payload.new;
           if (!incoming?.id) return;
+          if (isInboxMetaMessage(incoming)) return;
 
           const senderId = String(incoming.sender_id || '');
           const recipientId = String(incoming.recipient_id || '');
@@ -3366,32 +3567,98 @@ export default function App() {
 
   useEffect(() => {
     if (!user?.id) {
+      inboxMetaHydratedRef.current = false;
+      inboxMetaMessageIdRef.current = '';
+      inboxMetaLastSavedPayloadRef.current = '';
       setInboxBlockedUserIds([]);
+      setInboxDeletedMessageIds([]);
+      setInboxReportFallbackEntries([]);
       return;
     }
 
-    try {
-      const raw = window.localStorage.getItem(getInboxBlockedStorageKey(user.id));
-      const parsed = JSON.parse(raw || '[]');
-      const next = Array.isArray(parsed)
-        ? parsed.map((value) => String(value || '').trim()).filter(Boolean)
-        : [];
-      setInboxBlockedUserIds(next);
-    } catch (_error) {
-      setInboxBlockedUserIds([]);
-    }
+    let cancelled = false;
+    inboxMetaHydratedRef.current = false;
+
+    const localBlocked = normalizeIdList(readJsonArrayFromStorage(getInboxBlockedStorageKey(user.id)));
+    const localDeleted = normalizeIdList(readJsonArrayFromStorage(getInboxDeletedStorageKey(user.id)));
+    const localReports = normalizeInboxReports(readJsonArrayFromStorage(getInboxReportsStorageKey(user.id)));
+
+    setInboxBlockedUserIds(localBlocked);
+    setInboxDeletedMessageIds(localDeleted);
+    setInboxReportFallbackEntries(localReports);
+
+    const load = async () => {
+      try {
+        await loadInboxMetaForUser(user.id, localBlocked, localDeleted, localReports);
+      } catch (_error) {
+        // Als cloud ophalen faalt, blijven lokale waarden actief.
+      } finally {
+        if (!cancelled) {
+          inboxMetaHydratedRef.current = true;
+        }
+      }
+    };
+
+    void load();
+
+    return () => {
+      cancelled = true;
+    };
   }, [user?.id]);
 
   useEffect(() => {
     if (!user?.id) return;
 
     try {
-      const normalized = Array.from(new Set(inboxBlockedUserIds.map((value) => String(value || '').trim()).filter(Boolean)));
-      window.localStorage.setItem(getInboxBlockedStorageKey(user.id), JSON.stringify(normalized));
+      const normalized = normalizeIdList(inboxBlockedUserIds);
+      writeJsonArrayToStorage(getInboxBlockedStorageKey(user.id), normalized);
     } catch (_error) {
       // Negeer lokale opslagfouten; blokkeren blijft in-memory actief.
     }
   }, [user?.id, inboxBlockedUserIds]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+
+    try {
+      const normalized = normalizeIdList(inboxDeletedMessageIds);
+      writeJsonArrayToStorage(getInboxDeletedStorageKey(user.id), normalized);
+    } catch (_error) {
+      // Negeer lokale opslagfouten; lokale verbergstatus blijft in-memory actief.
+    }
+  }, [user?.id, inboxDeletedMessageIds]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+
+    try {
+      const normalized = normalizeInboxReports(inboxReportFallbackEntries);
+      writeJsonArrayToStorage(getInboxReportsStorageKey(user.id), normalized);
+    } catch (_error) {
+      // Rapport-fallback blijft in-memory beschikbaar.
+    }
+  }, [user?.id, inboxReportFallbackEntries]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    if (!inboxMetaHydratedRef.current) return;
+
+    const timer = setTimeout(() => {
+      void (async () => {
+        const saved = await persistInboxMetaToCloud(
+          user.id,
+          inboxBlockedUserIds,
+          inboxDeletedMessageIds,
+          inboxReportFallbackEntries
+        );
+        if (!saved) {
+          addLog('⚠️ Inbox voorkeuren synchroniseren met cloud mislukt; lokale fallback blijft actief.', 'info');
+        }
+      })();
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [user?.id, inboxBlockedUserIds, inboxDeletedMessageIds, inboxReportFallbackEntries]);
 
   useEffect(() => {
     const recipientId = String(inboxRecipientId || '').trim();
@@ -3426,14 +3693,17 @@ export default function App() {
 
         if (error || cancelled || !data || data.length === 0) return;
 
-        const latestId = String(data[0]?.id || '');
+        const visibleData = data.filter((message) => !isInboxMetaMessage(message));
+        if (visibleData.length === 0) return;
+
+        const latestId = String(visibleData[0]?.id || '');
         if (!latestId) return;
 
         const knownId = inboxLatestIncomingIdRef.current;
         if (!knownId) {
           setInboxMessages((prev) => {
             const existingIds = new Set(prev.map((message) => message.id));
-            const uniqueIncoming = data.filter((message) => !existingIds.has(message.id));
+            const uniqueIncoming = visibleData.filter((message) => !existingIds.has(message.id));
             if (uniqueIncoming.length === 0) return prev;
             return [...uniqueIncoming, ...prev].slice(0, 250);
           });
@@ -3443,8 +3713,8 @@ export default function App() {
 
         if (latestId === knownId) return;
 
-        const knownIndex = data.findIndex((message) => String(message?.id || '') === knownId);
-        const newMessages = knownIndex === -1 ? [data[0]] : data.slice(0, knownIndex);
+        const knownIndex = visibleData.findIndex((message) => String(message?.id || '') === knownId);
+        const newMessages = knownIndex === -1 ? [visibleData[0]] : visibleData.slice(0, knownIndex);
         if (newMessages.length === 0) {
           inboxLatestIncomingIdRef.current = latestId;
           return;
@@ -4191,7 +4461,7 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => openInboxComposeForMember(selectedMemberProfile)}
-                  className="mt-2 px-3 py-2 text-xs rounded-lg border border-sky-700 text-sky-300 hover:bg-sky-950/30"
+                  className="mt-2 px-3 py-2 text-xs bg-slate-800 rounded-lg border border-sky-700 text-sky-300 hover:bg-slate-850/80 transition"
                 >
                   Stuur prive bericht
                 </button>
@@ -4490,8 +4760,31 @@ export default function App() {
 if (currentView === 'inbox') {
     const ownId = String(user?.id || '');
     const blockedUserIdSet = new Set((inboxBlockedUserIds || []).map((value) => String(value)));
+  const deletedMessageIdSet = new Set((inboxDeletedMessageIds || []).map((value) => String(value)));
+    const blockedUserNameMap = new Map();
+    inboxContacts.forEach((member) => {
+      const memberId = String(member?.id || '').trim();
+      if (!memberId) return;
+      blockedUserNameMap.set(memberId, formatDisplayUsername(member?.username || 'Onbekend'));
+    });
+    inboxMessages.forEach((message) => {
+      const senderId = String(message?.sender_id || '').trim();
+      const recipientId = String(message?.recipient_id || '').trim();
+      if (senderId && !blockedUserNameMap.has(senderId)) {
+        blockedUserNameMap.set(senderId, formatDisplayUsername(message?.sender_username || 'Onbekend'));
+      }
+      if (recipientId && !blockedUserNameMap.has(recipientId)) {
+        blockedUserNameMap.set(recipientId, formatDisplayUsername(message?.recipient_username || 'Onbekend'));
+      }
+    });
+    const blockedUsersSummary = inboxBlockedUserIds.map((blockedId) => ({
+      id: String(blockedId || '').trim(),
+      username: blockedUserNameMap.get(String(blockedId || '').trim()) || 'Onbekend'
+    })).filter((entry) => entry.id);
     const visibleInboxContacts = inboxContacts.filter((member) => !blockedUserIdSet.has(String(member.id || '')));
     const filteredMessages = inboxMessages.filter((message) => {
+      const messageId = String(message?.id || '');
+      if (messageId && deletedMessageIdSet.has(messageId)) return false;
       const isReceived = String(message?.recipient_id || '') === ownId;
       const actorId = String(isReceived ? message?.sender_id : message?.recipient_id || '');
       if (actorId && blockedUserIdSet.has(actorId)) return false;
@@ -4548,7 +4841,7 @@ if (currentView === 'inbox') {
               <button
                 type="button"
                 onClick={() => setIsInboxComposeOpen((prev) => !prev)}
-                className="px-3 py-1.5 text-xs rounded-lg text-slate-200 bg-slate-800 hover:bg-slate-700"
+                className="px-3 py-1.5 text-xs rounded text-slate-200 bg-slate-800"
               >
                 {isInboxComposeOpen ? 'Sluit nieuw bericht' : 'Nieuw bericht'}
               </button>
@@ -4611,16 +4904,6 @@ if (currentView === 'inbox') {
                   >
                     {inboxSending ? 'Verzenden...' : 'Verstuur prive bericht'}
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      void refreshInboxData();
-                    }}
-                    disabled={inboxLoading}
-                    className="px-3 py-2 text-xs rounded-lg border border-slate-700 text-slate-300 bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    Vernieuw inbox
-                  </button>
                 </div>
               </div>
             )}
@@ -4647,9 +4930,36 @@ if (currentView === 'inbox') {
               </div>
 
               {(inboxBlockedUserIds.length > 0 || blockedMessageCount > 0) && (
-                <p className="text-[11px] text-slate-500">
-                  Geblokkeerde gebruikers: {inboxBlockedUserIds.length} • Verborgen berichten: {blockedMessageCount}
-                </p>
+                <div className="rounded-lg border border-slate-800 bg-slate-900/40 p-2.5 space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-[11px] text-slate-500">
+                      Geblokkeerde gebruikers: {inboxBlockedUserIds.length} • Verborgen berichten: {blockedMessageCount}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={handleClearInboxBlocks}
+                      disabled={inboxBlockedUserIds.length === 0}
+                      className="px-2 py-1 text-[11px] rounded border border-slate-700 text-slate-200 hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Deblokkeer alles
+                    </button>
+                  </div>
+                  {blockedUsersSummary.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {blockedUsersSummary.map((entry) => (
+                        <button
+                          key={entry.id}
+                          type="button"
+                          onClick={() => handleUnblockInboxUser(entry.id, entry.username)}
+                          className="px-2 py-1 text-[11px] rounded border border-slate-700 text-slate-200 hover:bg-slate-800"
+                          title={`Deblokkeer ${entry.username}`}
+                        >
+                          Deblokkeer {entry.username}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
               )}
 
               {inboxLoading ? (
@@ -4825,7 +5135,7 @@ if (currentView === 'helpdesk') {
                       void handleSubmitHelpdeskEmail();
                     }}
                     disabled={helpdeskSending || hasDuplicateDraft}
-                    className="px-3 py-2 text-xs rounded-lg border border-emerald-700 text-emerald-300 hover:bg-emerald-950/30 disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="px-3 py-2 text-slate-300 rounded-lg border border-emerald-700 bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {helpdeskSending ? 'Verzenden...' : hasDuplicateDraft ? 'Al verzonden' : 'Verstuur helpdeskverzoek'}
                   </button>
@@ -4900,7 +5210,7 @@ if (currentView === 'settings') {
                       void saveUsernameChange();
                     }}
                     disabled={usernameChangeLoading || !usernameDraft.trim()}
-                    className="px-3 py-2 text-xs rounded-md border border-rose-700 hover:bg-rose-950/30 disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="px-3 py-2 text-slate-300 rounded-md border border-rose-700 bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {usernameChangeLoading ? 'Opslaan...' : 'Opslaan gebruikersnaam'}
                   </button>
