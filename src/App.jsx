@@ -2997,6 +2997,12 @@ export default function App() {
   }, [actionNotice]);
 
   useEffect(() => {
+    if (currentView === 'helpdesk') return;
+    if (!actionNotice?.persist) return;
+    setActionNotice(null);
+  }, [currentView, actionNotice]);
+
+  useEffect(() => {
     if (!adminNotice) return;
     const timer = setTimeout(() => setAdminNotice(null), 3500);
     return () => clearTimeout(timer);
