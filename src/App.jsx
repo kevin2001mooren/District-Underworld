@@ -16,6 +16,7 @@ const getEmailRedirectUrl = () => {
   return isLocalhost ? APP_PUBLIC_URL : `${window.location.origin}/`;
 };
 const ADMIN_EMAILS = ['kevin2001mooren@gmail.com'];
+const HELPDESK_EMAIL = ADMIN_EMAILS[0] || 'support@district-underworld.invalid';
 const VALID_ROLES = ['admin', 'moderator', 'helper', 'lid'];
 const STAFF_ROLES = ['admin', 'moderator', 'helper'];
 const PRISON_BRIBE_BASE_COST = 500;
@@ -101,6 +102,9 @@ export default function App() {
   const [usernameDraft, setUsernameDraft] = useState('');
   const [usernameChangeError, setUsernameChangeError] = useState('');
   const [usernameChangeLoading, setUsernameChangeLoading] = useState(false);
+  const [helpdeskCategory, setHelpdeskCategory] = useState('algemeen');
+  const [helpdeskSubject, setHelpdeskSubject] = useState('');
+  const [helpdeskMessage, setHelpdeskMessage] = useState('');
   const dashboardScrollRef = useRef(null);
   const chatScrollRef = useRef(null);
   const shouldAutoScrollChatRef = useRef(true);
@@ -865,6 +869,64 @@ export default function App() {
 
   const showAdminNotice = (text, type = 'info') => {
     setAdminNotice({ text, type });
+  };
+
+  const buildHelpdeskMailPayload = () => {
+    const usernameValue = (stats?.username || loginUsername || user?.email?.split('@')[0] || 'Onbekend').trim();
+    const subjectValue = helpdeskSubject.trim() || `Helpdesk: ${helpdeskCategory}`;
+    const messageValue = helpdeskMessage.trim();
+    const categoryLabel = helpdeskCategory || 'algemeen';
+    const createdAt = new Date().toISOString();
+
+    const bodyLines = [
+      'Nieuwe helpdesk aanvraag',
+      '',
+      `Gebruiker: ${usernameValue}`,
+      `User ID: ${user?.id || 'onbekend'}`,
+      `E-mail account: ${user?.email || 'onbekend'}`,
+      `Categorie: ${categoryLabel}`,
+      `Datum: ${createdAt}`,
+      '',
+      'Bericht:',
+      messageValue || '(geen bericht ingevuld)'
+    ];
+
+    return {
+      subject: `[District Helpdesk] ${subjectValue}`,
+      body: bodyLines.join('\n')
+    };
+  };
+
+  const handleOpenHelpdeskEmail = () => {
+    const subjectValue = helpdeskSubject.trim();
+    const messageValue = helpdeskMessage.trim();
+
+    if (!subjectValue) {
+      showActionNotice('Vul eerst een onderwerp in.', 'error');
+      return;
+    }
+
+    if (!messageValue || messageValue.length < 10) {
+      showActionNotice('Vul een duidelijk bericht in (minimaal 10 tekens).', 'error');
+      return;
+    }
+
+    const payload = buildHelpdeskMailPayload();
+    const mailtoUrl = `mailto:${HELPDESK_EMAIL}?subject=${encodeURIComponent(payload.subject)}&body=${encodeURIComponent(payload.body)}`;
+    window.location.href = mailtoUrl;
+    showActionNotice('Je mailprogramma is geopend met je helpdeskbericht.', 'success');
+  };
+
+  const handleCopyHelpdeskEmail = async () => {
+    const payload = buildHelpdeskMailPayload();
+    const text = `Aan: ${HELPDESK_EMAIL}\nOnderwerp: ${payload.subject}\n\n${payload.body}`;
+
+    try {
+      await navigator.clipboard.writeText(text);
+      showActionNotice('Helpdeskbericht gekopieerd. Je kunt het nu in je e-mail plakken.', 'success');
+    } catch (_error) {
+      showActionNotice('Kopieren mislukt. Gebruik de knop Open e-mail.', 'error');
+    }
   };
 
   const formatAmountWithDots = (value) => {
@@ -2616,8 +2678,8 @@ export default function App() {
           type="button"
           className="left-utility-item"
           onClick={() => {
-            addLog('🆘 Helpdesk knop ingedrukt.');
-            showActionNotice('Helpdesk geopend. Stel je vraag in de live chat.', 'info');
+            setCityMenuOpen(false);
+            setCurrentView('helpdesk');
           }}
         >
           Helpdesk
@@ -2637,9 +2699,7 @@ export default function App() {
           className="left-utility-item"
           onClick={() => {
             setCityMenuOpen(false);
-            setActiveTab('overzicht');
-            scrollDashboardToTop();
-            addLog('ℹ️ Informatie knop ingedrukt.');
+            setCurrentView('information');
           }}
         >
           Informatie
@@ -3182,7 +3242,7 @@ export default function App() {
                     )}
                   </div>
                   <div>
-                    <p className="text-xa text-slate-400 tracking-wider"><span style={roleNameColorStyle(userRole)}>{stats?.username ? formatDisplayUsername(stats.username) : 'Onbekend'}</span></p>
+                    <p className="text-xl text-slate-400 tracking-wider"><span style={roleNameColorStyle(userRole)}>{stats?.username ? formatDisplayUsername(stats.username) : 'Onbekend'}</span></p>
                     <button
                       type="button"
                       onClick={() => setIsProfilePhotoMenuOpen((prev) => !prev)}
@@ -3593,7 +3653,7 @@ export default function App() {
                     </div>
                   )}
                 </div>
-                <p className="text-xa text-slate-400 tracking-wider"><span style={roleNameColorStyle(selectedMemberProfile.role)}>{selectedMemberName}</span></p>
+                <p className="text-xl text-slate-400 tracking-wider"><span style={roleNameColorStyle(selectedMemberProfile.role)}>{selectedMemberName}</span></p>
               </div>
 
               <p className="text-slate-300"><span className="text-slate-500">Rol:</span> <span className={roleColorClass(selectedMemberProfile.role)}>{roleLabel(selectedMemberProfile.role)}</span></p>
@@ -3912,6 +3972,129 @@ export default function App() {
     );
   }
 
+if (currentView === 'helpdesk') {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans app-with-left-utility">
+        <header className="bg-slate-900 border-b border-slate-800 py-4 px-6 flex flex-wrap justify-between items-center gap-4">
+          <div className="flex items-center gap-3">
+            {renderHeaderPlayerInfo()}
+          </div>
+          <div className="flex items-center gap-2">
+            {canOpenStaffPanel && (
+              <button
+                onClick={() => setCurrentView('admin')}
+                className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
+                title="Open admin functies"
+              >
+                Admin
+              </button>
+            )}
+            <button
+              onClick={() => setCurrentView('profile')}
+              className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
+              title="Toon mijn profiel"
+            >
+              Mijn profiel
+            </button>
+            <button
+              onClick={() => setCurrentView('members')}
+              className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
+              title="Toon leden"
+            >
+              Leden
+            </button>
+          </div>
+        </header>
+
+        {renderTopTabs()}
+
+        <main className="flex-grow p-6">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl max-w-3xl mx-auto">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-4"> ❓ Helpdesk</h3>
+            <div className="bg-slate-950 border border-slate-850 rounded-xl p-4 space-y-2.5 text-sm">
+              <div className="rounded-xl border border-slate-800 bg-slate-900/30 p-4 space-y-3">
+                <p className="text-sm font-semibold text-slate-200">Stuur een helpdeskverzoek via e-mail</p>
+                <p className="text-xs text-slate-400">
+                  Vul je aanvraag in. Daarna opent je mailprogramma automatisch met alle gegevens ingevuld.
+                </p>
+
+                <div className="grid gap-2">
+                  <label className="text-[11px] text-slate-400" htmlFor="helpdesk-category">Categorie</label>
+                  <select
+                    id="helpdesk-category"
+                    value={helpdeskCategory}
+                    onChange={(e) => setHelpdeskCategory(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-rose-500"
+                  >
+                    <option value="algemeen">Algemeen</option>
+                    <option value="account">Account</option>
+                    <option value="betaling">Betaling</option>
+                    <option value="bug">Bug</option>
+                    <option value="misbruik">Misbruik melden</option>
+                  </select>
+                </div>
+
+                <div className="grid gap-2">
+                  <label className="text-[11px] text-slate-400" htmlFor="helpdesk-subject">Onderwerp</label>
+                  <input
+                    id="helpdesk-subject"
+                    type="text"
+                    value={helpdeskSubject}
+                    onChange={(e) => setHelpdeskSubject(e.target.value)}
+                    placeholder="Kort onderwerp van je vraag"
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-rose-500"
+                  />
+                </div>
+
+                <div className="grid gap-2">
+                  <label className="text-[11px] text-slate-400" htmlFor="helpdesk-message">Bericht</label>
+                  <textarea
+                    id="helpdesk-message"
+                    value={helpdeskMessage}
+                    onChange={(e) => setHelpdeskMessage(e.target.value)}
+                    placeholder="Leg uit wat er aan de hand is."
+                    rows={6}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-rose-500 resize-y"
+                  />
+                </div>
+
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <button
+                    type="button"
+                    onClick={handleOpenHelpdeskEmail}
+                    className="px-3 py-2 text-xs rounded-lg border border-emerald-700 text-emerald-300 hover:bg-emerald-950/30"
+                  >
+                    Open e-mail
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void handleCopyHelpdeskEmail();
+                    }}
+                    className="px-3 py-2 text-xs rounded-lg border border-slate-700 text-slate-300 hover:bg-slate-800"
+                  >
+                    Kopieer e-mailtekst
+                  </button>
+                </div>
+
+                <p className="text-[11px] text-slate-500">Helpdesk e-mail: {HELPDESK_EMAIL}</p>
+              </div>
+
+              <div className="rounded-lg border border-slate-800 p-3">
+                <p className="text-xs font-semibold text-slate-200">Prive berichten op de site</p>
+                <p className="text-xs text-slate-400 mt-1">
+                  Deze functie bestaat nog niet. Tot die tijd loopt helpdeskcontact via e-mail.
+                </p>
+              </div>
+            </div>
+          </div>
+        </main>
+        {renderLeftUtilityMenu()}
+        {renderLiveChatWidget()}
+      </div>
+    );
+  }
+
 if (currentView === 'settings') {
     return (
       <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans app-with-left-utility">
@@ -3980,6 +4163,80 @@ if (currentView === 'settings') {
                 </div>
                 <p className="text-[11px] text-slate-500 mt-1">3-20 tekens, alleen letters, cijfers en underscore (_).</p>
                 {usernameChangeError && <p className="text-[11px] text-red-300 mt-1">{usernameChangeError}</p>}
+              </div>
+              </div>
+            </div>
+          </div>
+        </main>
+        {renderLeftUtilityMenu()}
+        {renderLiveChatWidget()}
+      </div>
+    );
+  }
+
+if (currentView === 'information') {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans app-with-left-utility">
+        <header className="bg-slate-900 border-b border-slate-800 py-4 px-6 flex flex-wrap justify-between items-center gap-4">
+          <div className="flex items-center gap-3">
+            {renderHeaderPlayerInfo()}
+          </div>
+          <div className="flex items-center gap-2">
+            {canOpenStaffPanel && (
+              <button
+                onClick={() => setCurrentView('admin')}
+                className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
+                title="Open admin functies"
+              >
+                Admin
+              </button>
+            )}
+            <button
+              onClick={() => setCurrentView('profile')}
+              className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
+              title="Toon mijn profiel"
+            >
+              Mijn profiel
+            </button>
+            <button
+              onClick={() => setCurrentView('members')}
+              className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
+              title="Toon leden"
+            >
+              Leden
+            </button>
+          </div>
+        </header>
+
+        {renderTopTabs()}
+
+        <main className="flex-grow p-6">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl max-w-3xl mx-auto">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-4"> ⓘ Informatie</h3>
+            <div className="bg-slate-950 border border-slate-850 rounded-xl p-4 space-y-2.5 text-sm">
+              <div className="flex flex-col sm:flex-row gap-4 sm:items-center sm:justify-between pb-4 mb-3">
+                <div className="pb-4 mb-3">
+                <p className="text-xa text-slate-400 uppercase tracking-wider mb-2">Regels</p>
+                <div className="flex flex-col">
+                  <p className="text-base text-slate-500">1. Respecteer andere spelers en staff.</p>
+                  <p className="text-base text-slate-500">2. Luister naar staff en volg hun instructies op.</p>
+                  <p className="text-base text-slate-500">3. Geen spam of ongepaste inhoud.</p>
+                  <p className="text-base text-slate-500">4. Toestemming van een ouder/verzorger hebben als je 16 bent.</p>
+                  <p className="text-base text-slate-500">5. Geen cheats of hacks gebruiken.</p>
+                  <p className="text-base text-slate-500">6. Geen misbruik maken van fouten.</p>
+                  <p className="text-base text-slate-500">7. Meld bugs en problemen bij helpdesk.</p>
+                  <p className="text-base text-slate-500">8. Spelen is op eigen risico.</p>
+                  <p className="text-base text-slate-500">9. Racisme/discriminatie is niet toegestaan.</p>
+                  <p className="text-base text-slate-500">10. Schelden en pestgedrag zijn niet toegestaan.</p>
+                  <p className="text-base text-slate-500">11. Het namaken/vervalsen van systeemberichten is niet toegestaan.</p>
+                  <p className="text-base text-slate-500">12. Geen capslock gebruiken (overmatig hoofdletter gebruik)</p>
+                  <p className="text-base text-slate-500">13. Niet spammen in berichten of chat.</p>
+                  <p className="text-base text-slate-500">14. Geen persoonlijke informatie delen van jezelf of anderen.</p>
+                  <p className="text-base text-slate-500">15. Geen reclame maken voor andere servers of diensten.</p>
+                </div>
+                <div className="mt-6">
+                  <p className="text-base">Overtredingen van de regels kunnen leiden tot straffen zoals waarschuwingen, tijdelijke bans of permanente bans.</p>
+                </div>
               </div>
               </div>
             </div>
