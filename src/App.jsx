@@ -1331,6 +1331,25 @@ export default function App() {
     const normalizedId = String(message?.id || '').trim();
     if (!normalizedId || inboxMessageActionId) return;
 
+    const ownId = String(user?.id || '').trim();
+    const senderId = String(message?.sender_id || '').trim();
+    const recipientId = String(message?.recipient_id || '').trim();
+    const isReceivedMessage = recipientId && ownId && recipientId === ownId;
+    const isOwnSentMessage = senderId && ownId && senderId === ownId;
+
+    if (!isReceivedMessage || isOwnSentMessage) {
+      showActionNotice('Alleen ontvangen berichten van andere spelers kunnen gemeld worden.', 'info');
+      return;
+    }
+
+    const alreadyReported = (inboxReportFallbackEntries || []).some(
+      (entry) => String(entry?.id || '').trim() === normalizedId
+    );
+    if (alreadyReported) {
+      showActionNotice('Dit bericht is al gemeld.', 'info');
+      return;
+    }
+
     const actorId = String(message?.sender_id || '').trim();
     const actorUsername = formatDisplayUsername(message?.sender_username || 'Onbekend');
     const fallbackEntry = {
@@ -1371,8 +1390,10 @@ export default function App() {
     }
 
     setInboxReportFallbackEntries((prev) => normalizeInboxReports([fallbackEntry, ...prev]));
+    setInboxDeletedMessageIds((prev) => Array.from(new Set([...prev.map((value) => String(value)), normalizedId])));
+    setInboxMessages((prev) => prev.filter((entry) => String(entry?.id || '') !== normalizedId));
 
-    showActionNotice(savedToDatabase ? 'Bericht gemeld bij staff.' : 'Bericht gemeld (lokaal opgeslagen).', 'success');
+    showActionNotice(savedToDatabase ? 'Bericht gemeld bij staff en verborgen.' : 'Bericht gemeld (lokaal opgeslagen) en verborgen.', 'success');
     setInboxMessageActionId('');
     setInboxMessageActionType('');
   };
@@ -1406,6 +1427,27 @@ export default function App() {
     if (inboxBlockedUserIds.length === 0) return;
     setInboxBlockedUserIds([]);
     showActionNotice('Alle inbox-blokkades zijn verwijderd.', 'success');
+  };
+
+  const handleRemoveReportedInboxEntry = (messageId, reportedAt) => {
+    if (!STAFF_ROLES.includes(userRole)) return;
+
+    const normalizedId = String(messageId || '').trim();
+    const normalizedReportedAt = String(reportedAt || '').trim();
+    if (!normalizedId) return;
+
+    setInboxReportFallbackEntries((prev) => {
+      const filtered = (prev || []).filter((entry) => {
+        const entryId = String(entry?.id || '').trim();
+        if (entryId !== normalizedId) return true;
+        if (!normalizedReportedAt) return false;
+        const entryReportedAt = String(entry?.reportedAt || '').trim();
+        return entryReportedAt !== normalizedReportedAt;
+      });
+      return normalizeInboxReports(filtered);
+    });
+
+    showActionNotice('Melding verwijderd uit staff-overzicht.', 'success');
   };
 
   const formatAmountWithDots = (value) => {
@@ -4461,9 +4503,9 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => openInboxComposeForMember(selectedMemberProfile)}
-                  className="mt-2 px-3 py-2 text-xs bg-slate-800 rounded-lg border border-sky-700 text-sky-300 hover:bg-slate-850/80 transition"
+                  className="mt-2 px-3 py-2 text-xs text-slate-300 bg-slate-800 rounded-lg border"
                 >
-                  Stuur prive bericht
+                  Stuur bericht
                 </button>
               )}
             </div>
@@ -4760,7 +4802,16 @@ export default function App() {
 if (currentView === 'inbox') {
     const ownId = String(user?.id || '');
     const blockedUserIdSet = new Set((inboxBlockedUserIds || []).map((value) => String(value)));
-  const deletedMessageIdSet = new Set((inboxDeletedMessageIds || []).map((value) => String(value)));
+    const deletedMessageIdSet = new Set((inboxDeletedMessageIds || []).map((value) => String(value)));
+    const reportedMessageIdSet = new Set(
+      (inboxReportFallbackEntries || [])
+        .map((entry) => String(entry?.id || '').trim())
+        .filter(Boolean)
+    );
+    const isStaffInboxView = STAFF_ROLES.includes(userRole);
+    const reportedEntriesForStaff = [...(inboxReportFallbackEntries || [])]
+      .filter((entry) => entry && typeof entry === 'object')
+      .sort((a, b) => new Date(b?.reportedAt || 0).getTime() - new Date(a?.reportedAt || 0).getTime());
     const blockedUserNameMap = new Map();
     inboxContacts.forEach((member) => {
       const memberId = String(member?.id || '').trim();
@@ -4862,11 +4913,6 @@ if (currentView === 'inbox') {
                       <option key={member.id} value={member.id}>{formatDisplayUsername(member.username || 'Onbekend')}</option>
                     ))}
                   </select>
-                  {selectedRecipient && (
-                    <p className="text-[11px] text-slate-500">
-                      Geselecteerd: <span className={roleColorClass(selectedRecipient.role)}>{formatDisplayUsername(selectedRecipient.username || 'Onbekend')}</span>
-                    </p>
-                  )}
                 </div>
 
                 <div className="grid gap-2">
@@ -4900,9 +4946,9 @@ if (currentView === 'inbox') {
                       void handleSendPrivateMessage();
                     }}
                     disabled={inboxSending}
-                    className="px-3 py-2 text-slate-300 bg-slate-800 rounded-lg border border-emerald-700 text-emerald-300 hover:bg-emerald-950/30 disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="px-3 py-2 text-slate-300 bg-slate-800 rounded-lg border disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    {inboxSending ? 'Verzenden...' : 'Verstuur prive bericht'}
+                    {inboxSending ? 'Verzenden...' : 'Verstuur bericht'}
                   </button>
                 </div>
               </div>
@@ -4962,6 +5008,51 @@ if (currentView === 'inbox') {
                 </div>
               )}
 
+              {isStaffInboxView && (
+                <div className="rounded-lg border border-slate-800 bg-slate-900/40 p-2.5 space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-[11px] text-slate-500">
+                      Gemelde berichten: {reportedEntriesForStaff.length}
+                    </p>
+                  </div>
+
+                  {reportedEntriesForStaff.length === 0 ? (
+                    <p className="text-xs text-slate-500">Nog geen meldingen voor staff.</p>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {reportedEntriesForStaff.slice(0, 25).map((entry, index) => {
+                        const reportedAtLabel = entry?.reportedAt
+                          ? new Date(entry.reportedAt).toLocaleString([], { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+                          : 'Onbekend';
+                        const fallbackKey = `${entry?.id || 'unknown'}-${entry?.reportedAt || index}`;
+
+                        return (
+                          <div key={fallbackKey} className="rounded border border-slate-800 bg-slate-950 p-2">
+                            <div className="flex items-start justify-between gap-2">
+                              <div>
+                                <p className="text-[11px] text-slate-300">
+                                  #{String(entry?.id || '').trim() || 'Onbekend'} • {formatDisplayUsername(entry?.senderUsername || 'Onbekend')} • {reportedAtLabel}
+                                </p>
+                                <p className="text-[11px] text-slate-500 mt-0.5">
+                                  Onderwerp: {entry?.subject || '(geen onderwerp)'}
+                                </p>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveReportedInboxEntry(entry?.id, entry?.reportedAt)}
+                                className="px-2 py-1 text-[11px] rounded border border-red-800/70 text-red-200 hover:bg-red-950/30"
+                              >
+                                Verwijder melding
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {inboxLoading ? (
                 <p className="text-xs text-slate-400">Inbox laden...</p>
               ) : inboxError ? (
@@ -4983,12 +5074,21 @@ if (currentView === 'inbox') {
                       : 'Onbekend';
                     const isActionLoading = inboxMessageActionId === messageId;
                     const canBlockActor = Boolean(actorId) && actorId !== ownId && !blockedUserIdSet.has(actorId);
+                    const isReported = messageId && reportedMessageIdSet.has(messageId);
+                    const canReportMessage = isReceived && actorId !== ownId && !isReported;
 
                     return (
                       <div key={message.id} className="rounded-xl border border-slate-800 bg-slate-900/40 p-3.5">
                         <div className="flex items-center justify-between gap-2">
                           <p className="text-xs font-semibold text-slate-200">{message.subject || '(geen onderwerp)'}</p>
-                          <span className="text-[11px] text-slate-500">{createdLabel}</span>
+                          <div className="flex items-center gap-1.5">
+                            {isReported && (
+                              <span className="px-1.5 py-0.5 text-[10px] rounded border border-slate-700 text-slate-300 bg-slate-800">
+                                Gemeld
+                              </span>
+                            )}
+                            <span className="text-[11px] text-slate-500">{createdLabel}</span>
+                          </div>
                         </div>
                         <p className="text-[11px] text-slate-400 mt-0.5">
                           {isReceived ? 'Van' : 'Naar'}: {actorLabel}
@@ -5011,10 +5111,16 @@ if (currentView === 'inbox') {
                             onClick={() => {
                               void handleReportPrivateMessage(message);
                             }}
-                            disabled={isActionLoading}
+                            disabled={isActionLoading || !canReportMessage}
                             className="px-2 py-1 text-[11px] rounded border border-amber-700/70 text-amber-200 hover:bg-amber-950/30 disabled:opacity-50 disabled:cursor-not-allowed"
                           >
-                            {isActionLoading && inboxMessageActionType === 'report' ? 'Melden...' : 'Meld'}
+                            {isActionLoading && inboxMessageActionType === 'report'
+                              ? 'Melden...'
+                              : isReported
+                                ? 'Gemeld'
+                                : isReceived
+                                  ? 'Meld'
+                                  : 'Niet mogelijk'}
                           </button>
                           <button
                             type="button"
