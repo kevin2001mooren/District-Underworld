@@ -4064,7 +4064,7 @@ if (currentView === 'helpdesk') {
             )}
 
             <div className="bg-slate-950 border border-slate-850 rounded-xl p-4 space-y-2.5 text-sm">
-              <div className="rounded-xl border border-slate-800 bg-slate-900/30 p-4 space-y-3">
+              <div className="p-4 space-y-3">
                 <p className="text-sm font-semibold text-slate-200">Stuur een helpdeskverzoek</p>
                 <p className="text-xs text-slate-400">
                   Vul je aanvraag in en verstuur direct vanaf de site.
