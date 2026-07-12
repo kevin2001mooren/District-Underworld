@@ -888,6 +888,7 @@ export default function App() {
       `User ID: ${user?.id || 'onbekend'}`,
       `E-mail account: ${user?.email || 'onbekend'}`,
       `Categorie: ${categoryLabel}`,
+      `Onderwerp: ${subjectValue}`,
       `Datum: ${createdAt}`,
       '',
       'Bericht:',
@@ -897,6 +898,7 @@ export default function App() {
     return {
       username: usernameValue,
       accountEmail: user?.email || 'onbekend',
+      plainSubject: subjectValue,
       subject: `[District Helpdesk] ${subjectValue}`,
       body: bodyLines.join('\n')
     };
@@ -946,6 +948,7 @@ export default function App() {
         body: JSON.stringify({
           name: payload.username,
           email: payload.accountEmail,
+          subject: payload.plainSubject,
           _subject: payload.subject,
           message: payload.body,
           _captcha: 'false',
