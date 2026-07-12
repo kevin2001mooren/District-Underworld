@@ -17,6 +17,7 @@ const getEmailRedirectUrl = () => {
 };
 const ADMIN_EMAILS = ['kevin2001mooren@gmail.com'];
 const HELPDESK_EMAIL = ADMIN_EMAILS[0] || 'support@district-underworld.invalid';
+const HELPDESK_SUBMIT_ENDPOINT = `https://formsubmit.co/ajax/${HELPDESK_EMAIL}`;
 const VALID_ROLES = ['admin', 'moderator', 'helper', 'lid'];
 const STAFF_ROLES = ['admin', 'moderator', 'helper'];
 const PRISON_BRIBE_BASE_COST = 500;
@@ -105,6 +106,8 @@ export default function App() {
   const [helpdeskCategory, setHelpdeskCategory] = useState('algemeen');
   const [helpdeskSubject, setHelpdeskSubject] = useState('');
   const [helpdeskMessage, setHelpdeskMessage] = useState('');
+  const [helpdeskSending, setHelpdeskSending] = useState(false);
+  const [helpdeskLastSentKey, setHelpdeskLastSentKey] = useState('');
   const dashboardScrollRef = useRef(null);
   const chatScrollRef = useRef(null);
   const shouldAutoScrollChatRef = useRef(true);
@@ -863,8 +866,8 @@ export default function App() {
     shouldAutoScrollChatRef.current = distanceFromBottom <= 80;
   };
 
-  const showActionNotice = (text, type = 'info') => {
-    setActionNotice({ text, type });
+  const showActionNotice = (text, type = 'info', persist = false) => {
+    setActionNotice({ text, type, persist });
   };
 
   const showAdminNotice = (text, type = 'info') => {
@@ -892,12 +895,24 @@ export default function App() {
     ];
 
     return {
+      username: usernameValue,
+      accountEmail: user?.email || 'onbekend',
       subject: `[District Helpdesk] ${subjectValue}`,
       body: bodyLines.join('\n')
     };
   };
 
-  const handleOpenHelpdeskEmail = () => {
+  const buildHelpdeskRequestKey = (categoryValue, subjectValue, messageValue) => {
+    return [
+      String(categoryValue || '').trim().toLowerCase(),
+      String(subjectValue || '').trim().toLowerCase(),
+      String(messageValue || '').trim()
+    ].join('||');
+  };
+
+  const handleSubmitHelpdeskEmail = async () => {
+    if (helpdeskSending) return;
+
     const subjectValue = helpdeskSubject.trim();
     const messageValue = helpdeskMessage.trim();
 
@@ -911,21 +926,48 @@ export default function App() {
       return;
     }
 
-    const payload = buildHelpdeskMailPayload();
-    const mailtoUrl = `mailto:${HELPDESK_EMAIL}?subject=${encodeURIComponent(payload.subject)}&body=${encodeURIComponent(payload.body)}`;
-    window.location.href = mailtoUrl;
-    showActionNotice('Je mailprogramma is geopend met je helpdeskbericht.', 'success');
-  };
+    const requestKey = buildHelpdeskRequestKey(helpdeskCategory, subjectValue, messageValue);
+    if (requestKey && requestKey === helpdeskLastSentKey) {
+      showActionNotice('Deze aanvraag is al verzonden. Pas je onderwerp of bericht aan voor een nieuwe mail.', 'info');
+      return;
+    }
 
-  const handleCopyHelpdeskEmail = async () => {
     const payload = buildHelpdeskMailPayload();
-    const text = `Aan: ${HELPDESK_EMAIL}\nOnderwerp: ${payload.subject}\n\n${payload.body}`;
 
     try {
-      await navigator.clipboard.writeText(text);
-      showActionNotice('Helpdeskbericht gekopieerd. Je kunt het nu in je e-mail plakken.', 'success');
-    } catch (_error) {
-      showActionNotice('Kopieren mislukt. Gebruik de knop Open e-mail.', 'error');
+      setHelpdeskSending(true);
+
+      const response = await fetch(HELPDESK_SUBMIT_ENDPOINT, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json'
+        },
+        body: JSON.stringify({
+          name: payload.username,
+          email: payload.accountEmail,
+          _subject: payload.subject,
+          message: payload.body,
+          _captcha: 'false',
+          _template: 'table'
+        })
+      });
+
+      const result = await response.json().catch(() => null);
+      const ok = response.ok && String(result?.success || '').toLowerCase() === 'true';
+
+      if (!ok) {
+        throw new Error(result?.message || 'Automatisch verzenden is mislukt.');
+      }
+
+        showActionNotice('Je helpdeskverzoek is automatisch verzonden.', 'success', true);
+        setHelpdeskLastSentKey(requestKey);
+      setHelpdeskSubject('');
+      setHelpdeskMessage('');
+    } catch (error) {
+      showActionNotice(`Automatisch verzenden mislukt: ${error?.message || 'onbekende fout'}`, 'error');
+    } finally {
+      setHelpdeskSending(false);
     }
   };
 
@@ -2942,6 +2984,11 @@ export default function App() {
 
   useEffect(() => {
     if (!actionNotice) return;
+
+    if (actionNotice.persist) {
+      return;
+    }
+
     const timer = setTimeout(() => setActionNotice(null), 3500);
     return () => clearTimeout(timer);
   }, [actionNotice]);
@@ -3973,6 +4020,9 @@ export default function App() {
   }
 
 if (currentView === 'helpdesk') {
+    const helpdeskDraftKey = buildHelpdeskRequestKey(helpdeskCategory, helpdeskSubject, helpdeskMessage);
+    const hasDuplicateDraft = Boolean(helpdeskLastSentKey) && helpdeskDraftKey === helpdeskLastSentKey;
+
     return (
       <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans app-with-left-utility">
         <header className="bg-slate-900 border-b border-slate-800 py-4 px-6 flex flex-wrap justify-between items-center gap-4">
@@ -4011,11 +4061,18 @@ if (currentView === 'helpdesk') {
         <main className="flex-grow p-6">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl max-w-3xl mx-auto">
             <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-4"> ❓ Helpdesk</h3>
+
+            {actionNotice && (
+              <div className={`mb-4 rounded-xl border p-3 text-xs ${actionNotice.type === 'error' ? 'bg-red-950/30 border-red-800/40 text-red-200' : 'bg-emerald-950/30 border-emerald-800/40 text-emerald-200'}`}>
+                {actionNotice.text}
+              </div>
+            )}
+
             <div className="bg-slate-950 border border-slate-850 rounded-xl p-4 space-y-2.5 text-sm">
               <div className="rounded-xl border border-slate-800 bg-slate-900/30 p-4 space-y-3">
-                <p className="text-sm font-semibold text-slate-200">Stuur een helpdeskverzoek via e-mail</p>
+                <p className="text-sm font-semibold text-slate-200">Stuur een helpdeskverzoek</p>
                 <p className="text-xs text-slate-400">
-                  Vul je aanvraag in. Daarna opent je mailprogramma automatisch met alle gegevens ingevuld.
+                  Vul je aanvraag in en verstuur direct vanaf de site.
                 </p>
 
                 <div className="grid gap-2">
@@ -4061,30 +4118,21 @@ if (currentView === 'helpdesk') {
                 <div className="flex flex-col sm:flex-row gap-2">
                   <button
                     type="button"
-                    onClick={handleOpenHelpdeskEmail}
-                    className="px-3 py-2 text-xs rounded-lg border border-emerald-700 text-emerald-300 hover:bg-emerald-950/30"
-                  >
-                    Open e-mail
-                  </button>
-                  <button
-                    type="button"
                     onClick={() => {
-                      void handleCopyHelpdeskEmail();
+                      void handleSubmitHelpdeskEmail();
                     }}
-                    className="px-3 py-2 text-xs rounded-lg border border-slate-700 text-slate-300 hover:bg-slate-800"
+                    disabled={helpdeskSending || hasDuplicateDraft}
+                    className="px-3 py-2 text-xs rounded-lg border border-emerald-700 text-emerald-300 hover:bg-emerald-950/30 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    Kopieer e-mailtekst
+                    {helpdeskSending ? 'Verzenden...' : hasDuplicateDraft ? 'Al verzonden' : 'Verstuur helpdeskverzoek'}
                   </button>
                 </div>
 
-                <p className="text-[11px] text-slate-500">Helpdesk e-mail: {HELPDESK_EMAIL}</p>
-              </div>
-
-              <div className="rounded-lg border border-slate-800 p-3">
-                <p className="text-xs font-semibold text-slate-200">Prive berichten op de site</p>
-                <p className="text-xs text-slate-400 mt-1">
-                  Deze functie bestaat nog niet. Tot die tijd loopt helpdeskcontact via e-mail.
-                </p>
+                {hasDuplicateDraft && (
+                  <div className="rounded-lg border border-emerald-800/50 bg-emerald-950/20 p-2.5 text-xs text-emerald-200">
+                    Deze aanvraag is al verzonden. Pas onderwerp of bericht aan om opnieuw te versturen.
+                  </div>
+                )}
               </div>
             </div>
           </div>
