@@ -1,16 +1,14 @@
-import React, { useState, useEffect, useRef } from 'react';
+﻿import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import './Game.css';
 import { createClient } from '@supabase/supabase-js';
-import { Shield, Skull, Zap, Swords, Coins, User, Lock, Loader2, Award, Clock, Mail } from 'lucide-react';
+import { Shield, Skull, Zap, Swords, Coins, User, Lock, Loader2, Award, Clock } from 'lucide-react';
 const SUPABASE_URL = "https://utqwbqymcbgoqunpjfff.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InV0cXdicXltY2Jnb3F1bnBqZmZmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMTAyMTUsImV4cCI6MjA5ODc4NjIxNX0.jirvlYKUSSmXDT-OC50zOR5TKVYEwT8NFAIFOBGhxSY";
 const APP_PUBLIC_URL = "https://district-underworld.vercel.app/";
 const DEFAULT_MALE_PROFILE_PHOTO = '/default-male-profile.jpeg';
 const DEFAULT_FEMALE_PROFILE_PHOTO = '/default-female-profile.jpeg';
 const DEFAULT_OTHER_PROFILE_PHOTO = '/default-other-profile.jpeg';
-const INBOX_META_SUBJECT = '__DU_INBOX_META__';
-const INBOX_META_VERSION = 1;
 
 const getEmailRedirectUrl = () => {
   const host = window.location.hostname;
@@ -98,7 +96,29 @@ export default function App() {
   const [chatDeleteHoverId, setChatDeleteHoverId] = useState(null);
   const [chatUserRoles, setChatUserRoles] = useState({});
   const [isChatWidgetOpen, setIsChatWidgetOpen] = useState(false);
+  const [chatWidgetTab, setChatWidgetTab] = useState('live');
+  const [isGlobalChatWindowOpen, setIsGlobalChatWindowOpen] = useState(true);
+  const [isChatSettingsMenuOpen, setIsChatSettingsMenuOpen] = useState(false);
+  const [chatWindowWidthPercent, setChatWindowWidthPercent] = useState(100);
+  const [chatWindowHeightPercent, setChatWindowHeightPercent] = useState(100);
+  const [chatUseBubbles, setChatUseBubbles] = useState(true);
+  const [chatShowAvatars, setChatShowAvatars] = useState(true);
   const [chatUnreadCount, setChatUnreadCount] = useState(0);
+  const [privateMessages, setPrivateMessages] = useState([]);
+  const [privateContacts, setPrivateContacts] = useState([]);
+  const [privateChatLoading, setPrivateChatLoading] = useState(false);
+  const [privateChatError, setPrivateChatError] = useState('');
+  const [isPrivateChatWindowOpen, setIsPrivateChatWindowOpen] = useState(false);
+  const [isChatConversationsMenuOpen, setIsChatConversationsMenuOpen] = useState(false);
+  const [openPrivateConversationKeys, setOpenPrivateConversationKeys] = useState([]);
+  const [activePrivateConversationKey, setActivePrivateConversationKey] = useState('');
+  const [privateConversationSearchTerm, setPrivateConversationSearchTerm] = useState('');
+  const [privateChatInput, setPrivateChatInput] = useState('');
+  const [privateChatSending, setPrivateChatSending] = useState(false);
+  const [privateUnreadByConversation, setPrivateUnreadByConversation] = useState({});
+  const [privateBlockedUserIds, setPrivateBlockedUserIds] = useState([]);
+  const [privateHiddenConversationKeys, setPrivateHiddenConversationKeys] = useState([]);
+  const [privateTypingByConversation, setPrivateTypingByConversation] = useState({});
   const [profilePhotoDraft, setProfilePhotoDraft] = useState('');
   const [profilePhotoError, setProfilePhotoError] = useState('');
   const [isProfilePhotoMenuOpen, setIsProfilePhotoMenuOpen] = useState(false);
@@ -110,23 +130,6 @@ export default function App() {
   const [helpdeskMessage, setHelpdeskMessage] = useState('');
   const [helpdeskSending, setHelpdeskSending] = useState(false);
   const [helpdeskLastSentKey, setHelpdeskLastSentKey] = useState('');
-  const [inboxMessages, setInboxMessages] = useState([]);
-  const [inboxContacts, setInboxContacts] = useState([]);
-  const [inboxLoading, setInboxLoading] = useState(false);
-  const [inboxError, setInboxError] = useState('');
-  const [inboxFilter, setInboxFilter] = useState('received');
-  const [inboxRecipientId, setInboxRecipientId] = useState('');
-  const [inboxSubject, setInboxSubject] = useState('');
-  const [inboxBody, setInboxBody] = useState('');
-  const [inboxSending, setInboxSending] = useState(false);
-  const [isInboxComposeOpen, setIsInboxComposeOpen] = useState(false);
-  const [inboxBlockedUserIds, setInboxBlockedUserIds] = useState([]);
-  const [inboxDeletedMessageIds, setInboxDeletedMessageIds] = useState([]);
-  const [inboxReportFallbackEntries, setInboxReportFallbackEntries] = useState([]);
-  const [inboxMessageActionId, setInboxMessageActionId] = useState('');
-  const [inboxMessageActionType, setInboxMessageActionType] = useState('');
-  const [inboxUnreadCount, setInboxUnreadCount] = useState(0);
-  const inboxLatestIncomingIdRef = useRef('');
   const dashboardScrollRef = useRef(null);
   const chatScrollRef = useRef(null);
   const shouldAutoScrollChatRef = useRef(true);
@@ -136,9 +139,10 @@ export default function App() {
   const isChatWidgetOpenRef = useRef(false);
   const lastCloudNetworkLogAtRef = useRef(0);
   const chatProfileRequestIdRef = useRef(0);
-  const inboxMetaMessageIdRef = useRef('');
-  const inboxMetaHydratedRef = useRef(false);
-  const inboxMetaLastSavedPayloadRef = useRef('');
+  const privateMessageIdsRef = useRef(new Set());
+  const privateTypingChannelRef = useRef(null);
+  const privateTypingTimeoutsRef = useRef({});
+  const privateTypingSentAtRef = useRef({});
   const recoveryAnchorRef = useRef({
     userId: null,
     energyMs: Date.now(),
@@ -227,7 +231,7 @@ export default function App() {
     const offlineHint = typeof navigator !== 'undefined' && navigator.onLine === false
       ? ' (apparaat lijkt offline)'
       : '';
-    addLog(`🚨 Synchronisatie met cloud database mislukt: netwerkfout (fetch)${offlineHint}.`, 'error');
+    addLog(` Synchronisatie met cloud database mislukt: netwerkfout (fetch)${offlineHint}.`, 'error');
   };
 
   const isMissingColumnError = (error, tableName, columnName) => {
@@ -304,7 +308,7 @@ export default function App() {
       try {
         await refreshAdminMembers();
       } catch (_error) {
-        addLog('❌ Admin leden laden mislukt.', 'error');
+        addLog('Admin leden laden mislukt.', 'error');
         setAdminMembers([]);
       } finally {
         setAdminLoading(false);
@@ -408,7 +412,7 @@ export default function App() {
             ? `Ledenlijst geblokkeerd door Supabase policy/RLS: ${message}`
             : `Ledenlijst laden mislukt: ${message}`
         );
-        addLog(`❌ Ledenlijst laden mislukt: ${message}`, 'error');
+        addLog(` Ledenlijst laden mislukt: ${message}`, 'error');
         setOnlineMembers([]);
       } finally {
         setOnlineLoading(false);
@@ -584,6 +588,67 @@ export default function App() {
 
   const getChatUsernameKey = (value) => (value || '').trim().toLowerCase();
 
+  const getPrivateConversationKey = (value) => String(value || '').trim();
+
+  const isPrivateConversationHidden = (conversationKey) => {
+    const key = getPrivateConversationKey(conversationKey);
+    if (!key) return false;
+    return privateHiddenConversationKeys.includes(key);
+  };
+
+  const isPrivateActorBlocked = (actorId) => {
+    const key = String(actorId || '').trim();
+    if (!key) return false;
+    return privateBlockedUserIds.includes(key);
+  };
+
+  const getPrivateConversationFromMessage = (message, ownId) => {
+    const senderId = String(message?.sender_id || '').trim();
+    const recipientId = String(message?.recipient_id || '').trim();
+    const isReceived = recipientId === ownId;
+    const actorId = isReceived ? senderId : recipientId;
+    const actorName = formatDisplayUsername(
+      isReceived ? (message?.sender_username || 'Onbekend') : (message?.recipient_username || 'Onbekend')
+    );
+    return {
+      key: getPrivateConversationKey(actorId),
+      actorId,
+      actorName,
+      isReceived
+    };
+  };
+
+  const buildPrivateConversationList = () => {
+    const ownId = String(user?.id || '').trim();
+    if (!ownId) return [];
+
+    const map = new Map();
+    (privateMessages || []).forEach((message) => {
+      const conversation = getPrivateConversationFromMessage(message, ownId);
+      if (!conversation.key) return;
+      if (isPrivateConversationHidden(conversation.key)) return;
+      const createdMs = new Date(message?.created_at || 0).getTime();
+      const current = map.get(conversation.key);
+      if (!current || createdMs > current.lastAt) {
+        map.set(conversation.key, {
+          key: conversation.key,
+          actorId: conversation.actorId,
+          actorName: conversation.actorName,
+          lastAt: Number.isFinite(createdMs) ? createdMs : 0,
+          lastText: String(message?.content || '').trim(),
+          unread: Number(privateUnreadByConversation[conversation.key] || 0)
+        });
+      } else {
+        map.set(conversation.key, {
+          ...current,
+          unread: Number(privateUnreadByConversation[conversation.key] || 0)
+        });
+      }
+    });
+
+    return Array.from(map.values()).sort((a, b) => b.lastAt - a.lastAt);
+  };
+
   const mergeChatUserRoles = (entries) => {
     if (!entries || entries.length === 0) return;
     setChatUserRoles((prev) => {
@@ -607,6 +672,305 @@ export default function App() {
       setChatUnreadCount(0);
     }
   }, [isChatWidgetOpen]);
+
+  useEffect(() => {
+    if (!user?.id) {
+      setPrivateMessages([]);
+      setPrivateContacts([]);
+      setOpenPrivateConversationKeys([]);
+      setActivePrivateConversationKey('');
+      setPrivateUnreadByConversation({});
+      setPrivateBlockedUserIds([]);
+      setPrivateHiddenConversationKeys([]);
+      setPrivateTypingByConversation({});
+      setPrivateChatInput('');
+      setPrivateChatError('');
+      privateMessageIdsRef.current = new Set();
+      privateTypingSentAtRef.current = {};
+      return;
+    }
+
+    void refreshPrivateChatData();
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    try {
+      const blockedRaw = localStorage.getItem(getPrivateBlockedStorageKey(user.id));
+      const hiddenRaw = localStorage.getItem(getPrivateHiddenStorageKey(user.id));
+      const blockedParsed = blockedRaw ? JSON.parse(blockedRaw) : [];
+      const hiddenParsed = hiddenRaw ? JSON.parse(hiddenRaw) : [];
+      setPrivateBlockedUserIds(normalizeIdList(Array.isArray(blockedParsed) ? blockedParsed : []));
+      setPrivateHiddenConversationKeys(normalizeIdList(Array.isArray(hiddenParsed) ? hiddenParsed : []));
+    } catch (_error) {
+      setPrivateBlockedUserIds([]);
+      setPrivateHiddenConversationKeys([]);
+    }
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    try {
+      const blocked = normalizeIdList(privateBlockedUserIds);
+      if (blocked.length === 0) {
+        localStorage.removeItem(getPrivateBlockedStorageKey(user.id));
+      } else {
+        localStorage.setItem(getPrivateBlockedStorageKey(user.id), JSON.stringify(blocked));
+      }
+    } catch (_error) {
+      // Ignore local storage failures.
+    }
+  }, [user?.id, privateBlockedUserIds, privateHiddenConversationKeys, isPrivateChatWindowOpen, activePrivateConversationKey]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    try {
+      const hidden = normalizeIdList(privateHiddenConversationKeys);
+      if (hidden.length === 0) {
+        localStorage.removeItem(getPrivateHiddenStorageKey(user.id));
+      } else {
+        localStorage.setItem(getPrivateHiddenStorageKey(user.id), JSON.stringify(hidden));
+      }
+    } catch (_error) {
+      // Ignore local storage failures.
+    }
+  }, [user?.id, privateHiddenConversationKeys]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const ownId = String(user.id);
+    const channel = supabase
+      .channel(`private-typing-${ownId}`)
+      .on('broadcast', { event: 'private-message' }, ({ payload }) => {
+        const senderId = String(payload?.senderId || '').trim();
+        const recipientId = String(payload?.recipientId || '').trim();
+        const messageId = String(payload?.id || '').trim() || `broadcast-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        if (!senderId || !recipientId) return;
+
+        const isParticipant = senderId === ownId || recipientId === ownId;
+        if (!isParticipant) return;
+        if (privateMessageIdsRef.current.has(messageId)) return;
+        if (recipientId === ownId && isPrivateActorBlocked(senderId)) return;
+
+        const createdAt = payload?.createdAt || new Date().toISOString();
+        const incomingMessage = {
+          id: messageId,
+          sender_id: senderId,
+          sender_username: payload?.senderUsername || 'Onbekend',
+          recipient_id: recipientId,
+          recipient_username: payload?.recipientUsername || 'Onbekend',
+          content: String(payload?.content || ''),
+          created_at: createdAt
+        };
+
+        const conversationKey = getPrivateConversationKey(recipientId === ownId ? senderId : recipientId);
+        if (conversationKey && privateHiddenConversationKeys.includes(conversationKey)) {
+          setPrivateHiddenConversationKeys((prev) => prev.filter((entry) => entry !== conversationKey));
+        }
+
+        privateMessageIdsRef.current.add(messageId);
+        setPrivateMessages((prev) => {
+          if (prev.some((entry) => String(entry?.id || '').trim() === messageId)) return prev;
+          return [...prev, incomingMessage].slice(-300);
+        });
+
+        const senderName = formatDisplayUsername(payload?.senderUsername || 'Onbekend');
+        if (senderId && senderId !== ownId) {
+          setPrivateContacts((prev) => {
+            if (prev.some((entry) => String(entry?.id || '').trim() === senderId)) return prev;
+            return [...prev, { id: senderId, username: senderName, role: 'lid' }];
+          });
+        }
+
+        const isIncoming = recipientId === ownId && senderId !== ownId;
+        const incomingConversationKey = getPrivateConversationKey(senderId);
+        const isOpenAndActive = isPrivateChatWindowOpen && activePrivateConversationKey === incomingConversationKey;
+        if (!isIncoming || !incomingConversationKey || isOpenAndActive) return;
+
+        setPrivateUnreadByConversation((prev) => ({
+          ...prev,
+          [incomingConversationKey]: (Number(prev[incomingConversationKey]) || 0) + 1
+        }));
+      })
+      .on('broadcast', { event: 'private-typing' }, ({ payload }) => {
+        const senderId = String(payload?.senderId || '').trim();
+        const recipientId = String(payload?.recipientId || '').trim();
+        const conversationKey = getPrivateConversationKey(payload?.conversationKey || senderId);
+        const senderName = formatDisplayUsername(payload?.senderName || 'Speler');
+        if (!senderId || senderId === ownId) return;
+        if (recipientId !== ownId) return;
+        if (!conversationKey) return;
+        if (isPrivateActorBlocked(senderId)) return;
+
+        setPrivateTypingByConversation((prev) => ({ ...prev, [conversationKey]: senderName }));
+        const existingTimeout = privateTypingTimeoutsRef.current[conversationKey];
+        if (existingTimeout) {
+          clearTimeout(existingTimeout);
+        }
+        privateTypingTimeoutsRef.current[conversationKey] = setTimeout(() => {
+          setPrivateTypingByConversation((prev) => {
+            const next = { ...prev };
+            delete next[conversationKey];
+            return next;
+          });
+          delete privateTypingTimeoutsRef.current[conversationKey];
+        }, 2200);
+      })
+      .subscribe();
+
+    privateTypingChannelRef.current = channel;
+
+    return () => {
+      supabase.removeChannel(channel);
+      privateTypingChannelRef.current = null;
+      Object.values(privateTypingTimeoutsRef.current).forEach((timeoutHandle) => clearTimeout(timeoutHandle));
+      privateTypingTimeoutsRef.current = {};
+      setPrivateTypingByConversation({});
+    };
+  }, [user?.id, privateBlockedUserIds]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const ownId = String(user.id);
+    const channel = supabase
+      .channel(`private-messages-live-${ownId}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'private_messages' },
+        (payload) => {
+          const incoming = payload.new;
+          const incomingId = String(incoming?.id || '').trim();
+          if (!incomingId || privateMessageIdsRef.current.has(incomingId)) return;
+
+          const senderId = String(incoming?.sender_id || '').trim();
+          const recipientId = String(incoming?.recipient_id || '').trim();
+          const isParticipant = senderId === ownId || recipientId === ownId;
+          if (!isParticipant) return;
+
+          const conversationKey = getPrivateConversationKey(recipientId === ownId ? senderId : recipientId);
+          if (recipientId === ownId && isPrivateActorBlocked(senderId)) {
+            return;
+          }
+
+          if (conversationKey && privateHiddenConversationKeys.includes(conversationKey)) {
+            setPrivateHiddenConversationKeys((prev) => prev.filter((entry) => entry !== conversationKey));
+          }
+
+          privateMessageIdsRef.current.add(incomingId);
+          setPrivateMessages((prev) => {
+            if (prev.some((entry) => String(entry?.id || '').trim() === incomingId)) return prev;
+            return [...prev, incoming].slice(-300);
+          });
+
+          if (senderId && senderId !== ownId) {
+            setPrivateContacts((prev) => {
+              if (prev.some((entry) => String(entry?.id || '').trim() === senderId)) return prev;
+              return [...prev, { id: senderId, username: incoming?.sender_username || 'Onbekend', role: 'lid' }];
+            });
+          }
+
+          const isIncoming = recipientId === ownId && senderId !== ownId;
+          const incomingConversationKey = getPrivateConversationKey(senderId);
+          const isOpenAndActive = isPrivateChatWindowOpen && activePrivateConversationKey === incomingConversationKey;
+          if (!isIncoming || !incomingConversationKey || isOpenAndActive) return;
+
+          setPrivateUnreadByConversation((prev) => ({
+            ...prev,
+            [incomingConversationKey]: (Number(prev[incomingConversationKey]) || 0) + 1
+          }));
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user?.id, isPrivateChatWindowOpen, activePrivateConversationKey, privateBlockedUserIds, privateHiddenConversationKeys]);
+
+  useEffect(() => {
+    if (!activePrivateConversationKey) return;
+    if (!isPrivateChatWindowOpen) return;
+    setPrivateUnreadByConversation((prev) => {
+      if (!prev[activePrivateConversationKey]) return prev;
+      return { ...prev, [activePrivateConversationKey]: 0 };
+    });
+  }, [activePrivateConversationKey, isPrivateChatWindowOpen]);
+
+  useEffect(() => {
+    if (!user?.id) {
+      setChatWindowWidthPercent(100);
+      setChatWindowHeightPercent(100);
+      setChatUseBubbles(true);
+      setChatShowAvatars(true);
+      return;
+    }
+
+    const storageKey = getChatSettingsStorageKey(user.id);
+    try {
+      const raw = localStorage.getItem(storageKey);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+
+      const widthValue = Number(parsed?.widthPercent);
+      const heightValue = Number(parsed?.heightPercent);
+      if (Number.isFinite(widthValue)) {
+        setChatWindowWidthPercent(Math.min(130, Math.max(70, Math.round(widthValue))));
+      }
+      if (Number.isFinite(heightValue)) {
+        setChatWindowHeightPercent(Math.min(130, Math.max(70, Math.round(heightValue))));
+      }
+
+      if (typeof parsed?.useBubbles === 'boolean') {
+        setChatUseBubbles(parsed.useBubbles);
+      }
+      if (typeof parsed?.showAvatars === 'boolean') {
+        setChatShowAvatars(parsed.showAvatars);
+      }
+    } catch (_error) {
+      // Ignore corrupted local preferences and continue with defaults.
+    }
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    const storageKey = getChatSettingsStorageKey(user.id);
+    try {
+      localStorage.setItem(storageKey, JSON.stringify({
+        widthPercent: chatWindowWidthPercent,
+        heightPercent: chatWindowHeightPercent,
+        useBubbles: chatUseBubbles,
+        showAvatars: chatShowAvatars
+      }));
+    } catch (_error) {
+      // Ignore storage write failures.
+    }
+  }, [user?.id, chatWindowWidthPercent, chatWindowHeightPercent, chatUseBubbles, chatShowAvatars]);
+
+  useEffect(() => {
+    if (!isChatSettingsMenuOpen) return;
+
+    const handlePointerDown = (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      if (target.closest('[data-chat-popover]') || target.closest('[data-chat-popover-toggle]')) return;
+
+      setIsChatSettingsMenuOpen(false);
+    };
+
+    const handleKeyDown = (event) => {
+      if (event.key !== 'Escape') return;
+      setIsChatSettingsMenuOpen(false);
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isChatSettingsMenuOpen]);
 
   const fetchRolesForChatUsernames = async (usernames) => {
     const normalized = Array.from(new Set((usernames || [])
@@ -692,9 +1056,295 @@ export default function App() {
       shouldAutoScrollChatRef.current = true;
       setChatMessages(sorted);
     } catch (error) {
-      addLog(`❌ Chat laden mislukt: ${error.message}`, 'error');
+      addLog(` Chat laden mislukt: ${error.message}`, 'error');
     } finally {
       setChatLoading(false);
+    }
+  };
+
+  const refreshPrivateChatData = async () => {
+    if (!user?.id) return;
+    setPrivateChatLoading(true);
+    setPrivateChatError('');
+    try {
+      const [messagesResult, contactsResult] = await Promise.all([
+        supabase
+          .from('private_messages')
+          .select('id, sender_id, sender_username, recipient_id, recipient_username, content, created_at')
+          .or(`recipient_id.eq.${user.id},sender_id.eq.${user.id}`)
+          .order('created_at', { ascending: false })
+          .limit(300),
+        supabase
+          .from('player_stats')
+          .select('id, username, role')
+          .neq('id', user.id)
+          .order('username', { ascending: true })
+          .limit(600)
+      ]);
+
+      if (messagesResult.error) throw messagesResult.error;
+      if (contactsResult.error) throw contactsResult.error;
+
+      const messages = (messagesResult.data || []).slice().reverse();
+      setPrivateMessages(messages);
+      privateMessageIdsRef.current = new Set(messages.map((entry) => String(entry?.id || '').trim()).filter(Boolean));
+      setPrivateContacts((contactsResult.data || []).map((entry) => ({
+        ...entry,
+        role: normalizeRole(entry?.role)
+      })));
+    } catch (error) {
+      const text = String(error?.message || 'onbekende fout');
+      setPrivateChatError(`Privechat laden mislukt: ${text}`);
+    } finally {
+      setPrivateChatLoading(false);
+    }
+  };
+
+  const sendPrivateTypingSignal = async (conversation, draftValue = '') => {
+    const channel = privateTypingChannelRef.current;
+    if (!channel || !user?.id) return;
+
+    const recipientId = String(conversation?.actorId || '').trim();
+    const conversationKey = getPrivateConversationKey(conversation?.key || recipientId);
+    const text = String(draftValue || '').trim();
+    if (!recipientId || !conversationKey || !text) return;
+
+    const now = Date.now();
+    const lastSentAt = Number(privateTypingSentAtRef.current[conversationKey] || 0);
+    if (now - lastSentAt < 900) return;
+    privateTypingSentAtRef.current[conversationKey] = now;
+
+    try {
+      await channel.send({
+        type: 'broadcast',
+        event: 'private-typing',
+        payload: {
+          senderId: String(user.id),
+          senderName: stats?.username || user?.email?.split('@')[0] || 'Onbekend',
+          recipientId,
+          conversationKey
+        }
+      });
+    } catch (_error) {
+      // Typing indicator is best-effort only.
+    }
+  };
+
+  const handleSendPrivateChatMessage = async (conversation) => {
+    if (!user?.id || !stats || privateChatSending) return;
+    const recipientId = String(conversation?.actorId || '').trim();
+    const content = String(privateChatInput || '').trim();
+    if (!recipientId || content.length < 1) return;
+
+    const recipientFromContacts = privateContacts.find((entry) => String(entry?.id || '').trim() === recipientId);
+    const recipientUsername = String(
+      recipientFromContacts?.username || conversation?.actorName || 'Onbekend'
+    ).trim() || 'Onbekend';
+    const privateSubject = `Chat met ${recipientUsername}`;
+
+    const senderName = stats?.username || user?.email?.split('@')[0] || 'Onbekend';
+    setPrivateChatSending(true);
+    try {
+      const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+      const tryInsertPrivateMessage = async (targetRecipientId) => {
+        const candidatePayloads = [
+          {
+            sender_id: user.id,
+            sender_username: senderName,
+            recipient_id: targetRecipientId,
+            recipient_username: recipientUsername,
+            subject: privateSubject,
+            content
+          },
+          {
+            sender_id: user.id,
+            recipient_id: targetRecipientId,
+            subject: privateSubject,
+            content
+          }
+        ];
+
+        let lastError = null;
+        for (const payload of candidatePayloads) {
+          const insertResult = await supabase.from('private_messages').insert([payload]);
+          if (!insertResult.error) {
+            return null;
+          }
+
+          lastError = insertResult.error;
+          const errorText = String(insertResult.error?.message || '').toLowerCase();
+          const canRetrySchemaVariant =
+            Number(insertResult.error?.status || 0) === 400 ||
+            errorText.includes('column') ||
+            errorText.includes('schema cache') ||
+            errorText.includes('could not find');
+
+          if (!canRetrySchemaVariant) {
+            return lastError;
+          }
+        }
+
+        return lastError;
+      };
+
+      let finalRecipientId = recipientId;
+
+      if (!UUID_PATTERN.test(finalRecipientId)) {
+        const lookup = await supabase
+          .from('player_stats')
+          .select('id')
+          .ilike('username', recipientUsername)
+          .limit(1)
+          .maybeSingle();
+
+        const resolvedRecipientId = String(lookup?.data?.id || '').trim();
+        if (!resolvedRecipientId || !UUID_PATTERN.test(resolvedRecipientId)) {
+          throw new Error('Ontvanger-ID ongeldig. Open het profiel van de speler opnieuw en start daar de chat.');
+        }
+        finalRecipientId = resolvedRecipientId;
+      }
+
+      let error = await tryInsertPrivateMessage(finalRecipientId);
+
+      // Recovery path: recipient id in current conversation can be stale/invalid.
+      if (error) {
+        const errorText = String(error?.message || '').toLowerCase();
+        const invalidRecipientId =
+          errorText.includes('invalid input syntax for type uuid') ||
+          errorText.includes('recipient_id');
+
+        if (invalidRecipientId && recipientUsername && recipientUsername !== 'Onbekend') {
+          const lookup = await supabase
+            .from('player_stats')
+            .select('id')
+            .ilike('username', recipientUsername)
+            .limit(1)
+            .maybeSingle();
+
+          const resolvedRecipientId = String(lookup?.data?.id || '').trim();
+          if (resolvedRecipientId && resolvedRecipientId !== finalRecipientId) {
+            finalRecipientId = resolvedRecipientId;
+            error = await tryInsertPrivateMessage(finalRecipientId);
+            if (!error) {
+              setActivePrivateConversationKey(finalRecipientId);
+            }
+          }
+        }
+      }
+
+      if (error) {
+        const errorText = String(error?.message || '').toLowerCase();
+        const forbidden =
+          Number(error?.status || 0) === 403 ||
+          errorText.includes('forbidden') ||
+          errorText.includes('permission denied') ||
+          errorText.includes('row-level security') ||
+          errorText.includes('violates row-level security policy');
+
+        if (forbidden) {
+          const fallbackMessageId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+          const fallbackCreatedAt = new Date().toISOString();
+          const fallbackMessage = {
+            id: fallbackMessageId,
+            sender_id: String(user.id),
+            sender_username: senderName,
+            recipient_id: finalRecipientId,
+            recipient_username: recipientUsername,
+            subject: privateSubject,
+            content,
+            created_at: fallbackCreatedAt
+          };
+
+          privateMessageIdsRef.current.add(fallbackMessageId);
+          setPrivateMessages((prev) => {
+            if (prev.some((entry) => String(entry?.id || '').trim() === fallbackMessageId)) return prev;
+            return [...prev, fallbackMessage].slice(-300);
+          });
+
+          setPrivateContacts((prev) => {
+            if (prev.some((entry) => String(entry?.id || '').trim() === finalRecipientId)) return prev;
+            return [...prev, { id: finalRecipientId, username: recipientUsername, role: 'lid' }];
+          });
+
+          try {
+            await privateTypingChannelRef.current?.send({
+              type: 'broadcast',
+              event: 'private-message',
+              payload: {
+                id: fallbackMessageId,
+                senderId: String(user.id),
+                senderUsername: senderName,
+                recipientId: finalRecipientId,
+                recipientUsername,
+                content,
+                createdAt: fallbackCreatedAt
+              }
+            });
+          } catch (_broadcastError) {
+            // No-op: local fallback is already applied.
+          }
+
+          setPrivateChatInput('');
+          setPrivateTypingByConversation((prev) => {
+            const next = { ...prev };
+            delete next[getPrivateConversationKey(conversation?.key || conversation?.actorId)];
+            return next;
+          });
+          showActionNotice('Privebericht verzonden via realtime fallback (database policy blokkeert opslag).', 'info');
+          return;
+        }
+      }
+
+      if (error) throw error;
+
+      const sentAt = new Date().toISOString();
+      const localEchoId = `sent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const localEchoMessage = {
+        id: localEchoId,
+        sender_id: String(user.id),
+        sender_username: senderName,
+        recipient_id: finalRecipientId,
+        recipient_username: recipientUsername,
+        subject: privateSubject,
+        content,
+        created_at: sentAt
+      };
+
+      privateMessageIdsRef.current.add(localEchoId);
+      setPrivateMessages((prev) => {
+        if (prev.some((entry) => String(entry?.id || '').trim() === localEchoId)) return prev;
+        return [...prev, localEchoMessage].slice(-300);
+      });
+
+      setActivePrivateConversationKey(getPrivateConversationKey(finalRecipientId));
+      setIsPrivateChatWindowOpen(true);
+      setIsGlobalChatWindowOpen(false);
+
+      // Keep local contact cache in sync so follow-up sends never depend on a fresh reload.
+      setPrivateContacts((prev) => {
+        if (prev.some((entry) => String(entry?.id || '').trim() === finalRecipientId)) return prev;
+        return [...prev, { id: finalRecipientId, username: recipientUsername, role: 'lid' }];
+      });
+
+      setPrivateChatInput('');
+      setPrivateTypingByConversation((prev) => {
+        const next = { ...prev };
+        delete next[getPrivateConversationKey(conversation?.key || conversation?.actorId)];
+        return next;
+      });
+
+      // Reconcile temporary local echo with canonical DB rows.
+      void refreshPrivateChatData();
+    } catch (error) {
+      const detailParts = [error?.code, error?.message, error?.details, error?.hint]
+        .filter(Boolean)
+        .map((value) => String(value).trim())
+        .filter(Boolean);
+      const detailText = detailParts.length > 0 ? detailParts.join(' | ') : 'onbekende fout';
+      showActionNotice(`Prive bericht verzenden mislukt: ${detailText}`, 'error');
+    } finally {
+      setPrivateChatSending(false);
     }
   };
 
@@ -723,7 +1373,7 @@ export default function App() {
       if (error) throw error;
       setChatInput('');
     } catch (error) {
-      addLog(`❌ Bericht verzenden mislukt: ${error.message}`, 'error');
+      addLog(` Bericht verzenden mislukt: ${error.message}`, 'error');
     } finally {
       setChatSending(false);
     }
@@ -749,13 +1399,13 @@ export default function App() {
 
       if (verifyError) throw verifyError;
       if (remainingMessage) {
-        addLog('❌ Bericht niet verwijderd. Controleer admin rechten/RLS voor chat DELETE.', 'error');
+        addLog('Bericht niet verwijderd. Controleer admin rechten/RLS voor chat DELETE.', 'error');
         return;
       }
 
       setChatMessages((prev) => prev.filter((message) => message.id !== messageId));
     } catch (error) {
-      addLog(`❌ Bericht verwijderen mislukt: ${error.message}`, 'error');
+      addLog(` Bericht verwijderen mislukt: ${error.message}`, 'error');
     } finally {
       setChatDeletingId(null);
     }
@@ -866,7 +1516,7 @@ export default function App() {
 
       if (!resolvedProfile) {
         if (!isLatestRequest()) return;
-        addLog(`⚠️ Volledig profiel van ${formatDisplayUsername(targetUsername)} niet gevonden. Basisprofiel blijft zichtbaar.`, 'info');
+        addLog(` Volledig profiel van ${formatDisplayUsername(targetUsername)} niet gevonden. Basisprofiel blijft zichtbaar.`, 'info');
         return;
       }
 
@@ -877,8 +1527,36 @@ export default function App() {
       });
     } catch (error) {
       if (!isLatestRequest()) return;
-      addLog(`⚠️ Profiel laden uit database mislukt (${error.message}). Basisprofiel blijft zichtbaar.`, 'info');
+      addLog(` Profiel laden uit database mislukt (${error.message}). Basisprofiel blijft zichtbaar.`, 'info');
     }
+  };
+
+  const startPrivateConversation = (member) => {
+    if (!member || !user?.id) return;
+
+    const ownId = String(user.id || '').trim();
+    const actorId = String(member.id || '').trim();
+    if (!actorId || actorId === ownId) return;
+
+    const actorName = formatDisplayUsername(member.username || 'Onbekend');
+
+    setPrivateContacts((prev) => {
+      if (prev.some((entry) => String(entry?.id || '').trim() === actorId)) return prev;
+      return [...prev, { id: actorId, username: actorName, role: normalizeRole(member?.role) }];
+    });
+
+    setPrivateHiddenConversationKeys((prev) => prev.filter((entry) => entry !== actorId));
+    setOpenPrivateConversationKeys((prev) => {
+      const next = prev.filter((entry) => entry !== actorId);
+      return [...next, actorId].slice(-6);
+    });
+    setActivePrivateConversationKey(actorId);
+    setPrivateUnreadByConversation((prev) => ({ ...prev, [actorId]: 0 }));
+    setIsPrivateChatWindowOpen(true);
+    setIsGlobalChatWindowOpen(false);
+    setIsChatWidgetOpen(true);
+    setIsChatConversationsMenuOpen(false);
+    setPrivateConversationSearchTerm('');
   };
 
   const handleChatScroll = () => {
@@ -996,458 +1674,13 @@ export default function App() {
     }
   };
 
-  const getInboxBlockedStorageKey = (playerId) => `district-underworld-inbox-blocked-${playerId}`;
-  const getInboxReportsStorageKey = (playerId) => `district-underworld-inbox-reports-${playerId}`;
-  const getInboxDeletedStorageKey = (playerId) => `district-underworld-inbox-deleted-${playerId}`;
+  const getChatSettingsStorageKey = (playerId) => `district-underworld-chat-widget-settings-${playerId}`;
+  const getPrivateBlockedStorageKey = (playerId) => `district-underworld-private-blocked-${playerId}`;
+  const getPrivateHiddenStorageKey = (playerId) => `district-underworld-private-hidden-${playerId}`;
 
   const normalizeIdList = (values) => {
     const source = Array.isArray(values) ? values : [];
     return Array.from(new Set(source.map((value) => String(value || '').trim()).filter(Boolean)));
-  };
-
-  const normalizeInboxReports = (values) => {
-    const source = Array.isArray(values) ? values : [];
-    const normalized = source
-      .filter((entry) => entry && typeof entry === 'object')
-      .map((entry) => ({
-        id: String(entry.id || '').trim(),
-        reportedAt: entry.reportedAt || new Date().toISOString(),
-        reporterId: entry.reporterId || null,
-        senderId: entry.senderId || null,
-        senderUsername: String(entry.senderUsername || '').trim() || 'Onbekend',
-        subject: String(entry.subject || ''),
-        content: String(entry.content || '')
-      }))
-      .filter((entry) => entry.id);
-
-    const deduped = [];
-    const seen = new Set();
-
-    normalized.forEach((entry) => {
-      const key = `${entry.id}::${entry.reportedAt}`;
-      if (seen.has(key)) return;
-      seen.add(key);
-      deduped.push(entry);
-    });
-
-    return deduped.slice(0, 100);
-  };
-
-  const readJsonArrayFromStorage = (storageKey) => {
-    try {
-      const raw = window.localStorage.getItem(storageKey);
-      const parsed = JSON.parse(raw || '[]');
-      return Array.isArray(parsed) ? parsed : [];
-    } catch (_error) {
-      return [];
-    }
-  };
-
-  const writeJsonArrayToStorage = (storageKey, values) => {
-    try {
-      if (!Array.isArray(values) || values.length === 0) {
-        window.localStorage.removeItem(storageKey);
-        return;
-      }
-      window.localStorage.setItem(storageKey, JSON.stringify(values));
-    } catch (_error) {
-      // Lokale opslag is alleen fallback en mag geen appflow blokkeren.
-    }
-  };
-
-  const buildInboxMetaPayload = (blockedIds, deletedIds, reports) => {
-    return JSON.stringify({
-      version: INBOX_META_VERSION,
-      blockedUserIds: normalizeIdList(blockedIds),
-      deletedMessageIds: normalizeIdList(deletedIds),
-      reports: normalizeInboxReports(reports)
-    });
-  };
-
-  const parseInboxMetaPayload = (rawContent) => {
-    try {
-      const parsed = JSON.parse(String(rawContent || '{}'));
-      return {
-        blockedUserIds: normalizeIdList(parsed?.blockedUserIds),
-        deletedMessageIds: normalizeIdList(parsed?.deletedMessageIds),
-        reports: normalizeInboxReports(parsed?.reports)
-      };
-    } catch (_error) {
-      return {
-        blockedUserIds: [],
-        deletedMessageIds: [],
-        reports: []
-      };
-    }
-  };
-
-  const isInboxMetaMessage = (message) => {
-    return String(message?.subject || '').trim() === INBOX_META_SUBJECT;
-  };
-
-  const persistInboxMetaToCloud = async (playerId, blockedIds, deletedIds, reports) => {
-    if (!playerId) return false;
-
-    const payload = buildInboxMetaPayload(blockedIds, deletedIds, reports);
-    if (payload === inboxMetaLastSavedPayloadRef.current) {
-      return true;
-    }
-
-    const knownMetaId = String(inboxMetaMessageIdRef.current || '').trim();
-
-    if (knownMetaId) {
-      const { data, error } = await supabase
-        .from('private_messages')
-        .update({
-          content: payload,
-          sender_username: 'System',
-          recipient_username: 'System'
-        })
-        .eq('id', knownMetaId)
-        .eq('sender_id', playerId)
-        .eq('recipient_id', playerId)
-        .eq('subject', INBOX_META_SUBJECT)
-        .select('id')
-        .maybeSingle();
-
-      if (!error && data?.id) {
-        inboxMetaMessageIdRef.current = String(data.id);
-        inboxMetaLastSavedPayloadRef.current = payload;
-        return true;
-      }
-    }
-
-    const { data: insertedData, error: insertError } = await supabase
-      .from('private_messages')
-      .insert([{
-        sender_id: playerId,
-        sender_username: 'System',
-        recipient_id: playerId,
-        recipient_username: 'System',
-        subject: INBOX_META_SUBJECT,
-        content: payload
-      }])
-      .select('id')
-      .single();
-
-    if (insertError || !insertedData?.id) {
-      return false;
-    }
-
-    inboxMetaMessageIdRef.current = String(insertedData.id);
-    inboxMetaLastSavedPayloadRef.current = payload;
-    return true;
-  };
-
-  const loadInboxMetaForUser = async (playerId, localBlocked, localDeleted, localReports) => {
-    if (!playerId) return;
-
-    const { data, error } = await supabase
-      .from('private_messages')
-      .select('id, content, created_at')
-      .eq('sender_id', playerId)
-      .eq('recipient_id', playerId)
-      .eq('subject', INBOX_META_SUBJECT)
-      .order('created_at', { ascending: false })
-      .limit(1);
-
-    if (error) {
-      throw error;
-    }
-
-    const latestMeta = Array.isArray(data) && data.length > 0 ? data[0] : null;
-    const cloudMeta = parseInboxMetaPayload(latestMeta?.content || '{}');
-
-    inboxMetaMessageIdRef.current = latestMeta?.id ? String(latestMeta.id) : '';
-
-    const mergedBlocked = normalizeIdList([...localBlocked, ...cloudMeta.blockedUserIds]);
-    const mergedDeleted = normalizeIdList([...localDeleted, ...cloudMeta.deletedMessageIds]);
-    const mergedReports = normalizeInboxReports([...localReports, ...cloudMeta.reports]);
-
-    setInboxBlockedUserIds(mergedBlocked);
-    setInboxDeletedMessageIds(mergedDeleted);
-    setInboxReportFallbackEntries(mergedReports);
-
-    const mergedPayload = buildInboxMetaPayload(mergedBlocked, mergedDeleted, mergedReports);
-    inboxMetaLastSavedPayloadRef.current = mergedPayload;
-
-    if (!latestMeta && (mergedBlocked.length > 0 || mergedDeleted.length > 0 || mergedReports.length > 0)) {
-      const saved = await persistInboxMetaToCloud(playerId, mergedBlocked, mergedDeleted, mergedReports);
-      if (!saved) {
-        addLog('⚠️ Inbox voorkeuren konden niet naar cloud worden gesynchroniseerd; lokale fallback blijft actief.', 'info');
-      }
-    }
-  };
-
-  const refreshInboxData = async () => {
-    if (!user?.id) return;
-
-    setInboxLoading(true);
-    setInboxError('');
-
-    try {
-      const [messagesResult, contactsResult] = await Promise.all([
-        supabase
-          .from('private_messages')
-          .select('id, sender_id, sender_username, recipient_id, recipient_username, subject, content, created_at')
-          .or(`recipient_id.eq.${user.id},sender_id.eq.${user.id}`)
-          .order('created_at', { ascending: false })
-          .limit(250),
-        supabase
-          .from('player_stats')
-          .select('id, username, role')
-          .neq('id', user.id)
-          .order('username', { ascending: true })
-          .limit(500)
-      ]);
-
-      if (messagesResult.error) throw messagesResult.error;
-      if (contactsResult.error) throw contactsResult.error;
-
-      const loadedMessages = (messagesResult.data || []).filter((message) => !isInboxMetaMessage(message));
-      setInboxMessages(loadedMessages);
-      const latestIncoming = loadedMessages.find((message) => String(message?.recipient_id || '') === String(user.id));
-      inboxLatestIncomingIdRef.current = latestIncoming?.id ? String(latestIncoming.id) : inboxLatestIncomingIdRef.current;
-      setInboxContacts((contactsResult.data || []).map((member) => ({
-        ...member,
-        role: normalizeRole(member?.role)
-      })));
-    } catch (error) {
-      const message = String(error?.message || 'onbekende fout');
-      const missingTable = message.toLowerCase().includes('private_messages');
-
-      setInboxMessages([]);
-      setInboxContacts([]);
-      setInboxError(
-        missingTable
-          ? 'Inbox is nog niet beschikbaar. Tabel private_messages ontbreekt nog in Supabase.'
-          : `Inbox laden mislukt: ${message}`
-      );
-    } finally {
-      setInboxLoading(false);
-    }
-  };
-
-  const openInboxComposeForMember = (member) => {
-    if (!member?.id || !user?.id) return;
-    if (member.id === user.id) return;
-
-    setInboxRecipientId(String(member.id));
-    setInboxSubject('');
-    setInboxBody('');
-    setIsInboxComposeOpen(true);
-    setInboxFilter('sent');
-    setCurrentView('inbox');
-  };
-
-  const handleSendPrivateMessage = async () => {
-    if (!user?.id || inboxSending) return;
-
-    const recipientId = String(inboxRecipientId || '').trim();
-    const subjectValue = String(inboxSubject || '').trim();
-    const contentValue = String(inboxBody || '').trim();
-
-    if (!recipientId) {
-      showActionNotice('Kies eerst een ontvanger.', 'error');
-      return;
-    }
-
-    if (!subjectValue) {
-      showActionNotice('Vul eerst een onderwerp in.', 'error');
-      return;
-    }
-
-    if (contentValue.length < 2) {
-      showActionNotice('Vul een bericht in.', 'error');
-      return;
-    }
-
-    const recipient = inboxContacts.find((member) => String(member.id) === recipientId);
-    if (!recipient) {
-      showActionNotice('Ontvanger niet gevonden. Vernieuw de inbox en probeer opnieuw.', 'error');
-      return;
-    }
-
-    const senderUsername = stats?.username || loginUsername || user?.email?.split('@')[0] || 'Onbekend';
-
-    try {
-      setInboxSending(true);
-
-      const { error } = await supabase
-        .from('private_messages')
-        .insert([{
-          sender_id: user.id,
-          sender_username: senderUsername,
-          recipient_id: recipient.id,
-          recipient_username: recipient.username,
-          subject: subjectValue,
-          content: contentValue
-        }]);
-
-      if (error) throw error;
-
-      showActionNotice('Prive bericht verzonden.', 'success');
-      setInboxSubject('');
-      setInboxBody('');
-      setInboxFilter('sent');
-      await refreshInboxData();
-    } catch (error) {
-      showActionNotice(`Prive bericht verzenden mislukt: ${error?.message || 'onbekende fout'}`, 'error');
-    } finally {
-      setInboxSending(false);
-    }
-  };
-
-  const handleDeletePrivateMessage = async (messageId) => {
-    const normalizedId = String(messageId || '').trim();
-    if (!normalizedId || inboxMessageActionId) return;
-
-    try {
-      setInboxMessageActionId(normalizedId);
-      setInboxMessageActionType('delete');
-
-      const { error } = await supabase
-        .from('private_messages')
-        .delete()
-        .eq('id', normalizedId);
-
-      if (error) throw error;
-
-      setInboxDeletedMessageIds((prev) => Array.from(new Set([...prev.map((value) => String(value)), normalizedId])));
-      setInboxMessages((prev) => prev.filter((message) => String(message?.id || '') !== normalizedId));
-      showActionNotice('Bericht verwijderd.', 'success');
-    } catch (error) {
-      // Fallback: verberg lokaal zodat het bericht niet terugkomt na refresh.
-      setInboxDeletedMessageIds((prev) => Array.from(new Set([...prev.map((value) => String(value)), normalizedId])));
-      setInboxMessages((prev) => prev.filter((message) => String(message?.id || '') !== normalizedId));
-      showActionNotice('Bericht lokaal verborgen. Database verwijderen is mislukt.', 'info');
-    } finally {
-      setInboxMessageActionId('');
-      setInboxMessageActionType('');
-    }
-  };
-
-  const handleReportPrivateMessage = async (message) => {
-    const normalizedId = String(message?.id || '').trim();
-    if (!normalizedId || inboxMessageActionId) return;
-
-    const ownId = String(user?.id || '').trim();
-    const senderId = String(message?.sender_id || '').trim();
-    const recipientId = String(message?.recipient_id || '').trim();
-    const isReceivedMessage = recipientId && ownId && recipientId === ownId;
-    const isOwnSentMessage = senderId && ownId && senderId === ownId;
-
-    if (!isReceivedMessage || isOwnSentMessage) {
-      showActionNotice('Alleen ontvangen berichten van andere spelers kunnen gemeld worden.', 'info');
-      return;
-    }
-
-    const alreadyReported = (inboxReportFallbackEntries || []).some(
-      (entry) => String(entry?.id || '').trim() === normalizedId
-    );
-    if (alreadyReported) {
-      showActionNotice('Dit bericht is al gemeld.', 'info');
-      return;
-    }
-
-    const actorId = String(message?.sender_id || '').trim();
-    const actorUsername = formatDisplayUsername(message?.sender_username || 'Onbekend');
-    const fallbackEntry = {
-      id: normalizedId,
-      reportedAt: new Date().toISOString(),
-      reporterId: user?.id || null,
-      senderId: actorId || null,
-      senderUsername: actorUsername,
-      subject: message?.subject || '',
-      content: message?.content || ''
-    };
-
-    let savedToDatabase = false;
-
-    try {
-      setInboxMessageActionId(normalizedId);
-      setInboxMessageActionType('report');
-
-      const { error } = await supabase
-        .from('private_message_reports')
-        .insert([{
-          message_id: normalizedId,
-          reporter_id: user?.id || null,
-          reported_user_id: actorId || null,
-          reported_username: actorUsername,
-          subject: message?.subject || '',
-          content: message?.content || ''
-        }]);
-
-      if (error) throw error;
-      savedToDatabase = true;
-    } catch (error) {
-      const message = String(error?.message || '').toLowerCase();
-      const missingReportsTable = message.includes("private_message_reports") && message.includes('could not find the table');
-      if (!missingReportsTable) {
-        addLog(`⚠️ Inbox melding niet in database opgeslagen (${error?.message || 'onbekende fout'}). Lokale fallback gebruikt.`, 'info');
-      }
-    }
-
-    setInboxReportFallbackEntries((prev) => normalizeInboxReports([fallbackEntry, ...prev]));
-    setInboxDeletedMessageIds((prev) => Array.from(new Set([...prev.map((value) => String(value)), normalizedId])));
-    setInboxMessages((prev) => prev.filter((entry) => String(entry?.id || '') !== normalizedId));
-
-    showActionNotice(savedToDatabase ? 'Bericht gemeld bij staff en verborgen.' : 'Bericht gemeld (lokaal opgeslagen) en verborgen.', 'success');
-    setInboxMessageActionId('');
-    setInboxMessageActionType('');
-  };
-
-  const handleBlockInboxUser = (targetUserId, targetUsername) => {
-    const normalizedId = String(targetUserId || '').trim();
-    if (!normalizedId) return;
-    if (String(user?.id || '') === normalizedId) return;
-
-    setInboxBlockedUserIds((prev) => {
-      const next = Array.from(new Set([...prev.map((value) => String(value)), normalizedId]));
-      return next;
-    });
-
-    if (String(inboxRecipientId || '') === normalizedId) {
-      setInboxRecipientId('');
-    }
-
-    showActionNotice(`${formatDisplayUsername(targetUsername || 'Gebruiker')} is geblokkeerd.`, 'success');
-  };
-
-  const handleUnblockInboxUser = (targetUserId, targetUsername) => {
-    const normalizedId = String(targetUserId || '').trim();
-    if (!normalizedId) return;
-
-    setInboxBlockedUserIds((prev) => prev.filter((value) => String(value || '').trim() !== normalizedId));
-    showActionNotice(`${formatDisplayUsername(targetUsername || 'Gebruiker')} is gedeblokkeerd.`, 'success');
-  };
-
-  const handleClearInboxBlocks = () => {
-    if (inboxBlockedUserIds.length === 0) return;
-    setInboxBlockedUserIds([]);
-    showActionNotice('Alle inbox-blokkades zijn verwijderd.', 'success');
-  };
-
-  const handleRemoveReportedInboxEntry = (messageId, reportedAt) => {
-    if (!STAFF_ROLES.includes(userRole)) return;
-
-    const normalizedId = String(messageId || '').trim();
-    const normalizedReportedAt = String(reportedAt || '').trim();
-    if (!normalizedId) return;
-
-    setInboxReportFallbackEntries((prev) => {
-      const filtered = (prev || []).filter((entry) => {
-        const entryId = String(entry?.id || '').trim();
-        if (entryId !== normalizedId) return true;
-        if (!normalizedReportedAt) return false;
-        const entryReportedAt = String(entry?.reportedAt || '').trim();
-        return entryReportedAt !== normalizedReportedAt;
-      });
-      return normalizeInboxReports(filtered);
-    });
-
-    showActionNotice('Melding verwijderd uit staff-overzicht.', 'success');
   };
 
   const formatAmountWithDots = (value) => {
@@ -1508,7 +1741,7 @@ export default function App() {
 
         if (createError) throw createError;
         data = newRecord;
-        addLog(`🆕 Karakter aangemaakt! Welkom in het District, ${formatDisplayUsername(data.username)}!`, 'success');
+        addLog(` Karakter aangemaakt! Welkom in het District, ${formatDisplayUsername(data.username)}!`, 'success');
       } else if (error) {
         throw error;
       }
@@ -1537,7 +1770,7 @@ export default function App() {
       }
     } catch (err) {
       console.error(err);
-      addLog("❌ Database verbindingsfout.", "error");
+      addLog(" Database verbindingsfout.", "error");
     } finally {
       setLoading(false);
     }
@@ -1777,7 +2010,7 @@ export default function App() {
             blockedByPolicy = true;
           }
         } else if (!isMissingPlayerStatsColumnError(bulkError, fieldsPresentInRow[0])) {
-          addLog(`⚠️ Profielfoto cloud-opslag mislukt: ${bulkError.message}`, 'error');
+          addLog(` Profielfoto cloud-opslag mislukt: ${bulkError.message}`, 'error');
         }
       }
 
@@ -1806,7 +2039,7 @@ export default function App() {
           }
 
           if (!isMissingPlayerStatsColumnError(dbError, fieldName)) {
-            addLog(`⚠️ Profielfoto cloud-opslag mislukt: ${dbError.message}`, 'error');
+            addLog(` Profielfoto cloud-opslag mislukt: ${dbError.message}`, 'error');
             break;
           }
         }
@@ -1838,7 +2071,7 @@ export default function App() {
         showActionNotice('Profielfoto niet opgeslagen in cloud (netwerkfout).', 'error');
         logCloudNetworkIssueThrottled();
       } else if (blockedByPolicy) {
-        addLog('⚠️ Profielfoto kon niet naar cloud worden geschreven (mogelijk RLS/policy blokkade).', 'error');
+        addLog('Profielfoto kon niet naar cloud worden geschreven (mogelijk RLS/policy blokkade).', 'error');
         setProfilePhotoError('Cloud-opslag geblokkeerd. Controleer Supabase update policy voor player_stats.');
         showActionNotice('Profielfoto niet opgeslagen in cloud.', 'error');
       } else {
@@ -1904,7 +2137,7 @@ export default function App() {
 
     if (savedInDatabase) {
       if (savedPhotoField) {
-        addLog(`✅ Profielfoto opgeslagen in kolom: ${savedPhotoField}`, 'success');
+        addLog(` Profielfoto opgeslagen in kolom: ${savedPhotoField}`, 'success');
       }
       showActionNotice('Profielfoto opgeslagen en gesynchroniseerd.', 'success');
     } else {
@@ -2029,7 +2262,7 @@ export default function App() {
       }
 
       if (renameMessagesError) {
-        addLog(`⚠️ Gebruikersnaam in chatgeschiedenis niet overal bijgewerkt: ${renameMessagesError.message}`, 'error');
+        addLog(` Gebruikersnaam in chatgeschiedenis niet overal bijgewerkt: ${renameMessagesError.message}`, 'error');
       }
 
       try {
@@ -2045,12 +2278,12 @@ export default function App() {
       }
 
       showActionNotice('Gebruikersnaam succesvol gewijzigd.', 'success');
-      addLog(`👤 Gebruikersnaam gewijzigd naar ${formatDisplayUsername(nextUsernameValue)}.`, 'success');
+      addLog(` Gebruikersnaam gewijzigd naar ${formatDisplayUsername(nextUsernameValue)}.`, 'success');
     } catch (error) {
       const message = error?.message || 'Gebruikersnaam wijzigen mislukt.';
       setUsernameChangeError(message);
       showActionNotice(message, 'error');
-      addLog(`❌ ${message}`, 'error');
+      addLog(` ${message}`, 'error');
     } finally {
       setUsernameChangeLoading(false);
     }
@@ -2083,8 +2316,8 @@ export default function App() {
       if (!error && data) {
         setStats(data);
         if (energyRecovery > 0 || nerveRecovery > 0) {
-          addLog(`⏱️ Je bent ${elapsedMinutes} minuten offline geweest!`, 'info');
-          addLog(`⚡ Hersteld: +${updatedEnergy - currentStats.energy} Energie, +${updatedNerve - currentStats.nerve} Nerve.`, 'success');
+          addLog(` Je bent ${elapsedMinutes} minuten offline geweest!`, 'info');
+          addLog(` Hersteld: +${updatedEnergy - currentStats.energy} Energie, +${updatedNerve - currentStats.nerve} Nerve.`, 'success');
         }
       }
     } else {
@@ -2095,7 +2328,7 @@ export default function App() {
   // Sync current state to Supabase on actions
   const updateDB = async (updatedFields) => {
     if (!user?.id) {
-      addLog('🚨 Synchronisatie overgeslagen: geen actieve sessie.', 'error');
+      addLog('Synchronisatie overgeslagen: geen actieve sessie.', 'error');
       return false;
     }
 
@@ -2148,7 +2381,7 @@ export default function App() {
           return false;
         }
 
-        addLog(`🚨 Synchronisatie met cloud database mislukt: ${summarizeCloudError(error)}`, 'error');
+        addLog(` Synchronisatie met cloud database mislukt: ${summarizeCloudError(error)}`, 'error');
         return false;
       } catch (err) {
         if (attempt === 1 && isLikelyNetworkFetchError(err)) {
@@ -2160,7 +2393,7 @@ export default function App() {
           return false;
         }
 
-        addLog(`🚨 Synchronisatie met cloud database mislukt: ${summarizeCloudError(err)}`, 'error');
+        addLog(` Synchronisatie met cloud database mislukt: ${summarizeCloudError(err)}`, 'error');
         return false;
       }
     }
@@ -2175,12 +2408,12 @@ export default function App() {
 
   const handleTrain = () => {
     if (jailTime > 0) {
-      const message = "❌ Je zit opgesloten! Je kunt nu niet trainen.";
+      const message = " Je zit opgesloten! Je kunt nu niet trainen.";
       showActionNotice(message, 'error');
       return addLog(message, 'error');
     }
     if (stats.energy < 10) {
-      const message = "❌ Te vermoeid! Je hebt minimaal 10 Energie nodig.";
+      const message = " Te vermoeid! Je hebt minimaal 10 Energie nodig.";
       showActionNotice(message, 'error');
       return addLog(message, 'error');
     }
@@ -2206,11 +2439,11 @@ export default function App() {
       newMaxNerve += 2;
       newStats.energy = newMaxEnergy;
       newStats.nerve = newMaxNerve;
-      const message = `🎉 LEVEL UP! Je bent nu Level ${newLevel}! Energie & Nerve hersteld.`;
+      const message = ` LEVEL UP! Je bent nu Level ${newLevel}! Energie & Nerve hersteld.`;
       showActionNotice(message, 'success');
       addLog(message, 'levelup');
     } else {
-      const message = `🏋️ Getraind in de lokale sportschool! Kracht +${strengthGain}, XP +${xpGain}`;
+      const message = ` Getraind in de lokale sportschool! Kracht +${strengthGain}, XP +${xpGain}`;
       showActionNotice(message, 'success');
       addLog(message, 'success');
     }
@@ -2225,12 +2458,12 @@ export default function App() {
 
   const handlePickpocket = () => {
     if (jailTime > 0) {
-      const message = "❌ Gevangenen kunnen geen misdaden plegen!";
+      const message = " Gevangenen kunnen geen misdaden plegen!";
       showActionNotice(message, 'error');
       return addLog(message, 'error');
     }
     if (stats.nerve < 4) {
-      const message = "❌ Je hebt niet genoeg lef (Nerve). Wacht tot het herstelt.";
+      const message = " Je hebt niet genoeg lef (Nerve). Wacht tot het herstelt.";
       showActionNotice(message, 'error');
       return addLog(message, 'error');
     }
@@ -2242,11 +2475,11 @@ export default function App() {
       const cashLoot = Math.floor(Math.random() * 80) + 20;
       newStats.cash = stats.cash + cashLoot;
       newStats.xp = stats.xp + 10;
-      const message = `👛 Succes! Je hebt een toerist gerold voor $${cashLoot}. +10 XP.`;
+      const message = ` Succes! Je hebt een toerist gerold voor $${cashLoot}. +10 XP.`;
       showActionNotice(message, 'success');
       addLog(message, 'success');
     } else {
-      const message = '👮 Mislukt! De toerist had je door en je moest met lege handen vluchten!';
+      const message = ' Mislukt! De toerist had je door en je moest met lege handen vluchten!';
       showActionNotice(message, 'error');
       addLog(message, 'error');
     }
@@ -2256,12 +2489,12 @@ export default function App() {
 
   const handleHeist = () => {
     if (jailTime > 0) {
-      const message = '❌ Je zit momenteel in een cel!';
+      const message = ' Je zit momenteel in een cel!';
       showActionNotice(message, 'error');
       return addLog(message, 'error');
     }
     if (stats.nerve < 12) {
-      const message = '❌ Je hebt minimaal 12 Nerve nodig voor een bankoverval.';
+      const message = ' Je hebt minimaal 12 Nerve nodig voor een bankoverval.';
       showActionNotice(message, 'error');
       return addLog(message, 'error');
     }
@@ -2276,18 +2509,18 @@ export default function App() {
       const heistLoot = Math.floor(Math.random() * 1500) + 500;
       newStats.cash = stats.cash + heistLoot;
       newStats.xp = stats.xp + 40;
-      const message = `🏦 OVERVAL GESLAAGD! De lokale kluis leeggehaald voor $${heistLoot}! +40 XP.`;
+      const message = ` OVERVAL GESLAAGD! De lokale kluis leeggehaald voor $${heistLoot}! +40 XP.`;
       showActionNotice(message, 'success');
       addLog(message, 'success');
     } else {
       if (Math.random() > 0.5) {
         const jailUntil = new Date(Date.now() + 60 * 1000).toISOString();
         newStats.jail_until = jailUntil;
-        const message = '🚨 COPS! De SWAT was te snel ter plaatse. 60 seconden gevangenisstraf.';
+        const message = ' COPS! De SWAT was te snel ter plaatse. 60 seconden gevangenisstraf.';
         showActionNotice(message, 'error');
         addLog(message, 'jail');
       } else {
-        const message = '🏃 Alarm ging af! Je bent ternauwernood ontsnapt zonder buit.';
+        const message = ' Alarm ging af! Je bent ternauwernood ontsnapt zonder buit.';
         showActionNotice(message, 'error');
         addLog(message, 'error');
       }
@@ -2297,24 +2530,24 @@ export default function App() {
   };
 
   const handlePrisonBribe = async () => {
-    if (jailTime <= 0) return addLog('✅ Je bent al vrij.', 'info');
+    if (jailTime <= 0) return addLog('Je bent al vrij.', 'info');
     if (!stats) return;
 
     const bribeCost = calculatePrisonBribeCost(jailTime);
     const currentCash = stats.cash || 0;
     if (currentCash < bribeCost) {
       setPrisonActionWarning(`Te weinig cash voor vrijkopen. Nodig: $${bribeCost.toLocaleString()}.`);
-      return addLog(`❌ Te weinig cash om je vrij te kopen. Nodig: $${bribeCost.toLocaleString()}.`, 'error');
+      return addLog(` Te weinig cash om je vrij te kopen. Nodig: $${bribeCost.toLocaleString()}.`, 'error');
     }
 
     setPrisonActionWarning('');
     await updateDB({ cash: currentCash - bribeCost });
     await updateDB({ jail_until: null });
-    addLog(`💸 Je hebt een bewaker omgekocht voor $${bribeCost.toLocaleString()} en bent vrij.`, 'success');
+    addLog(` Je hebt een bewaker omgekocht voor $${bribeCost.toLocaleString()} en bent vrij.`, 'success');
   };
 
   const handlePrisonEscape = async () => {
-    if (jailTime <= 0) return addLog('✅ Je bent al vrij.', 'info');
+    if (jailTime <= 0) return addLog('Je bent al vrij.', 'info');
     if (!stats) return;
 
     const currentEnergy = stats.energy || 0;
@@ -2322,7 +2555,7 @@ export default function App() {
 
     if (currentNerve < PRISON_ESCAPE_NERVE_COST) {
       setPrisonActionWarning(`Te weinig lef voor uitbreken. Nodig: ${PRISON_ESCAPE_NERVE_COST} lef.`);
-      return addLog(`❌ Te weinig lef voor een uitbraak. Minimaal ${PRISON_ESCAPE_NERVE_COST} lef nodig.`, 'error');
+      return addLog(` Te weinig lef voor een uitbraak. Minimaal ${PRISON_ESCAPE_NERVE_COST} lef nodig.`, 'error');
     }
 
     setPrisonActionWarning('');
@@ -2335,7 +2568,7 @@ export default function App() {
     if (escaped) {
       await updateDB(baseFields);
       await updateDB({ jail_until: null });
-      addLog('🕳️ Uitbraak gelukt! Je bent ontsnapt uit de gevangenis.', 'success');
+      addLog('Uitbraak gelukt! Je bent ontsnapt uit de gevangenis.', 'success');
       return;
     }
 
@@ -2347,7 +2580,7 @@ export default function App() {
       jail_until: nextJailUntil,
       nerve: Math.max(0, currentNerve - PRISON_ESCAPE_NERVE_COST - 3)
     });
-    addLog(`🚨 Uitbraak mislukt! Je straf is met ${extraSentence} seconden verlengd.`, 'jail');
+    addLog(` Uitbraak mislukt! Je straf is met ${extraSentence} seconden verlengd.`, 'jail');
   };
 
   const refreshPrisonMembers = async () => {
@@ -2370,7 +2603,7 @@ export default function App() {
     const cost = calculatePrisonBribeCost(remaining);
     const currentCash = stats.cash || 0;
     if (currentCash < cost) {
-      return addLog(`❌ Te weinig cash om ${formatDisplayUsername(target.username)} vrij te kopen. Nodig: $${cost.toLocaleString()}.`, 'error');
+      return addLog(` Te weinig cash om ${formatDisplayUsername(target.username)} vrij te kopen. Nodig: $${cost.toLocaleString()}.`, 'error');
     }
 
     try {
@@ -2382,7 +2615,7 @@ export default function App() {
       });
 
       if (!error) {
-        const successMessage = data?.message || `🤝 Je hebt ${formatDisplayUsername(target.username)} vrijgekocht voor $${cost.toLocaleString()}.`;
+        const successMessage = data?.message || ` Je hebt ${formatDisplayUsername(target.username)} vrijgekocht voor $${cost.toLocaleString()}.`;
         addLog(successMessage, 'success');
         await refreshPrisonMembers();
         await fetchPlayerStats(user);
@@ -2413,10 +2646,10 @@ export default function App() {
         throw new Error('Vrijkoop geblokkeerd door RLS policy op player_stats.');
       }
 
-      addLog(`🤝 Je hebt ${formatDisplayUsername(target.username)} vrijgekocht voor $${cost.toLocaleString()}.`, 'success');
+      addLog(` Je hebt ${formatDisplayUsername(target.username)} vrijgekocht voor $${cost.toLocaleString()}.`, 'success');
       await refreshPrisonMembers();
     } catch (err) {
-      addLog(`❌ Vrijkoop voor speler mislukt: ${err.message}`, 'error');
+      addLog(` Vrijkoop voor speler mislukt: ${err.message}`, 'error');
     } finally {
       setPrisonActionLoadingId(null);
     }
@@ -2429,7 +2662,7 @@ export default function App() {
 
     const currentNerve = stats.nerve || 0;
     if (currentNerve < PRISON_RESCUE_NERVE_COST) {
-      return addLog(`❌ Je hebt minimaal ${PRISON_RESCUE_NERVE_COST} lef nodig om iemand te helpen ontsnappen.`, 'error');
+      return addLog(` Je hebt minimaal ${PRISON_RESCUE_NERVE_COST} lef nodig om iemand te helpen ontsnappen.`, 'error');
     }
 
     try {
@@ -2441,7 +2674,7 @@ export default function App() {
       });
 
       if (!error) {
-        addLog(data?.message || `🕳️ Uitbraakhulp geprobeerd op ${formatDisplayUsername(target.username)}.`, data?.escaped ? 'success' : 'jail');
+        addLog(data?.message || ` Uitbraakhulp geprobeerd op ${formatDisplayUsername(target.username)}.`, data?.escaped ? 'success' : 'jail');
         await refreshPrisonMembers();
         await fetchPlayerStats(user);
         return;
@@ -2474,7 +2707,7 @@ export default function App() {
           throw new Error('Uitbraakhulp geblokkeerd door RLS policy op player_stats.');
         }
 
-        addLog(`🕳️ Uitbraakhulp gelukt! ${formatDisplayUsername(target.username)} is vrij.`, 'success');
+        addLog(` Uitbraakhulp gelukt! ${formatDisplayUsername(target.username)} is vrij.`, 'success');
       } else {
         const extraSeconds = Math.floor(Math.random() * 21) + 20;
         const targetBase = new Date(target.jail_until).getTime();
@@ -2497,12 +2730,12 @@ export default function App() {
           throw new Error('Uitbraakhulp geblokkeerd door RLS policy op player_stats.');
         }
 
-        addLog(`🚨 Uitbraakhulp mislukt. Straf van ${formatDisplayUsername(target.username)} +${extraSeconds} sec.`, 'jail');
+        addLog(` Uitbraakhulp mislukt. Straf van ${formatDisplayUsername(target.username)} +${extraSeconds} sec.`, 'jail');
       }
 
       await refreshPrisonMembers();
     } catch (err) {
-      addLog(`❌ Uitbraakhulp mislukt: ${err.message}`, 'error');
+      addLog(` Uitbraakhulp mislukt: ${err.message}`, 'error');
     } finally {
       setPrisonActionLoadingId(null);
     }
@@ -2571,10 +2804,10 @@ export default function App() {
         const needsEmailConfirmation = !signUpData?.session;
 
         if (needsEmailConfirmation) {
-          addLog("✉️ Bevestig eerst je e-mailadres via de link in je inbox.", "info");
+          addLog(" Bevestig eerst je e-mailadres via de link in je inbox.", "info");
           setAuthSuccess('Account aangemaakt. Bevestig eerst je e-mailadres via de link in je inbox, daarna kun je inloggen.');
         } else {
-          addLog("✅ Account aangemaakt! Je kunt nu inloggen.", "success");
+          addLog(" Account aangemaakt! Je kunt nu inloggen.", "success");
           setAuthSuccess('Account aangemaakt. Je kunt nu inloggen met je gebruikersnaam en wachtwoord.');
         }
 
@@ -2640,7 +2873,7 @@ export default function App() {
           : rawMessage;
 
       setAuthError(normalizedMessage);
-      addLog(`❌ Fout: ${normalizedMessage}`, "error");
+      addLog(` Fout: ${normalizedMessage}`, "error");
     } finally {
       setAuthLoading(false);
     }
@@ -2688,8 +2921,8 @@ export default function App() {
 
           await updateDB({ cash: nextCash });
           const message = isAdd
-            ? `🛠️ Admin: ${formatDisplayUsername(member.username)} kreeg +$${amount.toLocaleString()}.`
-            : `🛠️ Admin: $${amount.toLocaleString()} afgenomen van ${formatDisplayUsername(member.username)}.`;
+            ? ` Admin: ${formatDisplayUsername(member.username)} kreeg +$${amount.toLocaleString()}.`
+            : ` Admin: $${amount.toLocaleString()} afgenomen van ${formatDisplayUsername(member.username)}.`;
           showAdminNotice(message, 'success');
           addLog(message, 'success');
           await refreshAdminMembers();
@@ -2767,8 +3000,8 @@ export default function App() {
         }
 
         const message = isAdd
-          ? `🛠️ Admin: ${formatDisplayUsername(member.username)} kreeg +$${amount.toLocaleString()}.`
-          : `🛠️ Admin: $${amount.toLocaleString()} afgenomen van ${formatDisplayUsername(member.username)}.`;
+          ? ` Admin: ${formatDisplayUsername(member.username)} kreeg +$${amount.toLocaleString()}.`
+          : ` Admin: $${amount.toLocaleString()} afgenomen van ${formatDisplayUsername(member.username)}.`;
         showAdminNotice(message, 'success');
         addLog(message, 'success');
       }
@@ -2783,7 +3016,7 @@ export default function App() {
             energy: stats?.max_energy || stats?.energy || 100,
             nerve: stats?.max_nerve || stats?.nerve || 20
           });
-          const message = `🛠️ Admin: ${formatDisplayUsername(member.username)} volledig hersteld.`;
+          const message = ` Admin: ${formatDisplayUsername(member.username)} volledig hersteld.`;
           showAdminNotice(message, 'success');
           addLog(message, 'success');
           await refreshAdminMembers();
@@ -2795,7 +3028,7 @@ export default function App() {
           p_action: 'recover'
         });
         if (error) throw error;
-        const message = `🛠️ Admin: ${formatDisplayUsername(member.username)} volledig hersteld.`;
+        const message = ` Admin: ${formatDisplayUsername(member.username)} volledig hersteld.`;
         showAdminNotice(message, 'success');
         addLog(message, 'success');
       }
@@ -2808,7 +3041,7 @@ export default function App() {
         if (member.id === user?.id) {
           const selfJailUntil = new Date(Date.now() + ADMIN_JAIL_SECONDS * 1000).toISOString();
           await updateDB({ jail_until: selfJailUntil });
-          const message = `🚓 Admin: je zit ${ADMIN_JAIL_SECONDS} sec in de cel.`;
+          const message = ` Admin: je zit ${ADMIN_JAIL_SECONDS} sec in de cel.`;
           showAdminNotice(message, 'success');
           addLog(message, 'jail');
           await refreshAdminMembers();
@@ -2857,7 +3090,7 @@ export default function App() {
           .maybeSingle();
 
         if (verifyError) {
-          throw new Error('Kon jail status niet verifiëren. Controleer RLS policies op player_stats.');
+          throw new Error('Kon jail status niet verifiren. Controleer RLS policies op player_stats.');
         }
 
         const remainingAfterAction = getRemainingJailSeconds(jailedTarget?.jail_until);
@@ -2865,7 +3098,7 @@ export default function App() {
           throw new Error('Jail actie lijkt niet opgeslagen. Voeg jail support toe in admin_apply_action of controleer RLS update policy.');
         }
 
-        const message = `🚓 Admin: ${formatDisplayUsername(member.username)} zit ${ADMIN_JAIL_SECONDS} sec in de cel.`;
+        const message = ` Admin: ${formatDisplayUsername(member.username)} zit ${ADMIN_JAIL_SECONDS} sec in de cel.`;
         showAdminNotice(message, 'success');
         addLog(message, 'jail');
       }
@@ -2894,7 +3127,7 @@ export default function App() {
           throw error;
         }
 
-        const message = `🛠️ Rol aangepast: ${formatDisplayUsername(member.username)} is nu ${nextRole}.`;
+        const message = ` Rol aangepast: ${formatDisplayUsername(member.username)} is nu ${nextRole}.`;
         showAdminNotice(message, 'success');
         addLog(message, 'success');
         setRankMenuOpenId(null);
@@ -2902,7 +3135,7 @@ export default function App() {
 
       await refreshAdminMembers();
     } catch (err) {
-      const message = `❌ Admin actie mislukt: ${err.message}`;
+      const message = ` Admin actie mislukt: ${err.message}`;
       showAdminNotice(message, 'error');
       addLog(message, 'error');
     } finally {
@@ -2913,76 +3146,250 @@ export default function App() {
   const renderLiveChatWidget = () => {
     if (!user || typeof document === 'undefined') return null;
 
-    return createPortal(
-      <div
-        style={{
-          position: 'fixed',
-          right: '16px',
-          bottom: '16px',
-          zIndex: 9999,
-          width: 'min(420px, calc(100vw - 24px))',
-          maxWidth: '420px'
-        }}
-      >
-        {isChatWidgetOpen ? (
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl shadow-xl overflow-hidden">
-            <div className="px-3 py-2 border-b border-slate-800 flex items-center justify-between">
-              <div className="text-xs font-bold uppercase tracking-wider text-slate-300">💬 Live Chat</div>
-              <button
-                type="button"
-                onClick={() => setIsChatWidgetOpen(false)}
-                className="px-2 py-1 text-xs rounded border border-slate-700 text-slate-300 hover:bg-slate-800"
-                title="Chat inklappen"
-              >
-                -
-              </button>
-            </div>
+    const chatWindowWidthPx = Math.round(380 * (chatWindowWidthPercent / 100));
+    const chatWindowHeightPx = Math.round(335 * (chatWindowHeightPercent / 100));
+    const baseDockBottomPx = 50;
+    const activeChannel = ['live', 'trade', 'faction'].includes(chatWidgetTab) ? chatWidgetTab : 'live';
+    const channelLabel = activeChannel === 'trade' ? 'Trade' : activeChannel === 'faction' ? 'Faction' : 'Global';
+    const isGlobalWindowVisible = isChatWidgetOpen && isGlobalChatWindowOpen;
+    const isPrivateWindowVisible = isPrivateChatWindowOpen;
+    const isConversationMenuVisible = isChatConversationsMenuOpen;
+    const isAnyChatPanelVisible = isGlobalWindowVisible || isPrivateWindowVisible || isConversationMenuVisible;
+    const estimatedChatPanelHeightPx = chatWindowHeightPx + 56;
+    const estimatedConversationsPanelHeightPx = Math.min(560, Math.max(260, window.innerHeight - 80));
+    const rightPanelWidthPx = isConversationMenuVisible
+      ? Math.min(360, Math.max(280, window.innerWidth - 20))
+      : chatWindowWidthPx;
+    const settingsPanelTargetWidthPx = 360;
+    const minSideBySideGapPx = 28;
+    const canPlaceSettingsSideBySide =
+      isAnyChatPanelVisible &&
+      window.innerWidth >= rightPanelWidthPx + settingsPanelTargetWidthPx + minSideBySideGapPx;
+    const settingsRightPx = canPlaceSettingsSideBySide ? rightPanelWidthPx + 18 : 10;
+    const settingsBottomPx = canPlaceSettingsSideBySide
+      ? baseDockBottomPx
+      : isConversationMenuVisible
+        ? baseDockBottomPx + estimatedConversationsPanelHeightPx + 8
+        : (isGlobalWindowVisible || isPrivateWindowVisible
+          ? baseDockBottomPx + estimatedChatPanelHeightPx + 8
+          : baseDockBottomPx);
+    const privateConversations = buildPrivateConversationList();
+    const selectedPrivateConversation = privateConversations.find((entry) => entry.key === activePrivateConversationKey) || (() => {
+      const fallbackContact = privateContacts.find(
+        (entry) => String(entry?.id || '').trim() === activePrivateConversationKey
+      );
+      if (!fallbackContact) return null;
+      return {
+        key: getPrivateConversationKey(fallbackContact.id),
+        actorId: String(fallbackContact.id || '').trim(),
+        actorName: formatDisplayUsername(fallbackContact.username || 'Onbekend'),
+        lastAt: 0,
+        lastText: '',
+        unread: Number(privateUnreadByConversation[String(fallbackContact.id || '').trim()] || 0)
+      };
+    })();
+    const ownId = String(user?.id || '').trim();
+    const selectedPrivateMessages = selectedPrivateConversation
+      ? privateMessages
+        .filter((message) => getPrivateConversationFromMessage(message, ownId).key === selectedPrivateConversation.key)
+      : [];
+    const unreadPrivateTotal = Object.values(privateUnreadByConversation).reduce((sum, value) => sum + (Number(value) || 0), 0);
+    const activeTypingLabel = selectedPrivateConversation
+      ? (privateTypingByConversation[selectedPrivateConversation.key] || '')
+      : '';
+    const normalizedConversationSearch = privateConversationSearchTerm.trim().toLowerCase();
+    const searchableContacts = (privateContacts || [])
+      .map((entry) => ({
+        id: String(entry?.id || '').trim(),
+        username: formatDisplayUsername(entry?.username || 'Onbekend'),
+        role: normalizeRole(entry?.role)
+      }))
+      .filter((entry) => Boolean(entry.id))
+      .filter((entry) => !isPrivateConversationHidden(entry.id))
+      .filter((entry) => {
+        if (!normalizedConversationSearch) return true;
+        return entry.username.toLowerCase().includes(normalizedConversationSearch);
+      })
+      .slice(0, 12);
 
+    const openPrivateConversation = (conversation) => {
+      const key = getPrivateConversationKey(conversation?.key || conversation?.actorId);
+      if (!key) return;
+      setPrivateHiddenConversationKeys((prev) => prev.filter((entry) => entry !== key));
+      setOpenPrivateConversationKeys((prev) => {
+        const next = prev.filter((entry) => entry !== key);
+        return [...next, key].slice(-6);
+      });
+      setActivePrivateConversationKey(key);
+      setIsPrivateChatWindowOpen(true);
+      setIsGlobalChatWindowOpen(false);
+      setIsChatConversationsMenuOpen(false);
+      setPrivateUnreadByConversation((prev) => ({ ...prev, [key]: 0 }));
+    };
+
+    const toggleIgnoreConversationActor = (actorId) => {
+      const key = String(actorId || '').trim();
+      if (!key) return;
+      setPrivateBlockedUserIds((prev) => {
+        if (prev.includes(key)) {
+          return prev.filter((entry) => entry !== key);
+        }
+        return [...prev, key];
+      });
+      if (activePrivateConversationKey === key) {
+        setIsPrivateChatWindowOpen(false);
+      }
+    };
+
+    const softDeleteConversation = (conversationKey) => {
+      const key = getPrivateConversationKey(conversationKey);
+      if (!key) return;
+      setPrivateHiddenConversationKeys((prev) => {
+        if (prev.includes(key)) return prev;
+        return [...prev, key];
+      });
+      setOpenPrivateConversationKeys((prev) => prev.filter((entry) => entry !== key));
+      setPrivateUnreadByConversation((prev) => ({ ...prev, [key]: 0 }));
+      if (activePrivateConversationKey === key) {
+        setActivePrivateConversationKey('');
+        setIsPrivateChatWindowOpen(false);
+      }
+    };
+
+    const closePrivateConversation = (conversationKey) => {
+      const key = getPrivateConversationKey(conversationKey);
+      if (!key) return;
+      setOpenPrivateConversationKeys((prev) => prev.filter((entry) => entry !== key));
+      setPrivateUnreadByConversation((prev) => ({ ...prev, [key]: 0 }));
+      setActivePrivateConversationKey((prev) => {
+        if (prev !== key) return prev;
+        const remainingKeys = openPrivateConversationKeys.filter((entry) => entry !== key);
+        return remainingKeys[remainingKeys.length - 1] || '';
+      });
+    };
+
+    const openConversationsMenu = () => {
+      const nextOpen = !isChatConversationsMenuOpen;
+      setIsChatConversationsMenuOpen(nextOpen);
+      if (nextOpen) {
+        setIsChatWidgetOpen(false);
+        setIsGlobalChatWindowOpen(false);
+        setIsPrivateChatWindowOpen(false);
+        setPrivateConversationSearchTerm('');
+        void refreshPrivateChatData();
+      }
+    };
+
+    const openChannelWindow = (channelKey) => {
+      setIsChatWidgetOpen(true);
+      setIsGlobalChatWindowOpen(true);
+      setIsPrivateChatWindowOpen(false);
+      setIsChatConversationsMenuOpen(false);
+      setChatWidgetTab(channelKey);
+      if (channelKey === 'live') {
+        setChatUnreadCount(0);
+        shouldAutoScrollChatRef.current = true;
+        requestAnimationFrame(() => {
+          scrollChatToBottom();
+        });
+      }
+    };
+
+    const closeChannelWindow = () => {
+      setIsGlobalChatWindowOpen(false);
+      setIsChatWidgetOpen(false);
+    };
+
+    return createPortal(
+      <>
+        {isChatWidgetOpen && isGlobalChatWindowOpen && (
+          <div
+            style={{
+              position: 'fixed',
+              right: '10px',
+              bottom: '48px',
+              zIndex: 9999,
+              display: 'flex',
+              alignItems: 'flex-end',
+              justifyContent: 'flex-end',
+              maxWidth: 'calc(100vw - 20px)'
+            }}
+          >
             <div
-              ref={chatScrollRef}
-              onScroll={handleChatScroll}
-              className="overflow-y-auto px-3 py-2.5"
               style={{
-                backgroundColor: '#020917',
-                maxHeight: `min(${Math.round(CHAT_MAX_VISIBLE_LINES * CHAT_FONT_SIZE_PX * CHAT_LINE_HEIGHT + 24)}px, calc(100vh - 220px))`
+                width: `min(${chatWindowWidthPx}px, calc(100vw - 20px))`,
+                border: '1px solid #4b4b4b',
+                borderRadius: '8px',
+                background: '#d9d9d9',
+                boxShadow: '0 14px 28px rgba(0,0,0,0.45)',
+                overflow: 'hidden'
               }}
             >
-              {chatLoading ? (
-                <p className="text-sm text-slate-400">Chat laden...</p>
-              ) : chatMessages.length === 0 ? (
-                <p className="text-sm text-slate-400">Nog geen berichten. Start de chat!</p>
-              ) : (
-                chatMessages.map((message) => {
-                  const ownMessage = isOwnChatMessage(message);
-                  const displayName = formatDisplayUsername(message.username || 'Onbekend');
-                  const normalizedName = (displayName || '').trim().toLowerCase();
-                  const isSystemMessage = normalizedName === 'systeem' || normalizedName === 'system';
-                  const chatRole = ownMessage
-                    ? userRole
-                    : (chatUserRoles[getChatUsernameKey(message.username)] || 'lid');
-                  const nameClass = isSystemMessage ? 'text-emerald-400' : '';
-                  const nameStyle = isSystemMessage ? undefined : roleNameColorStyle(chatRole);
-                  const canOpenProfile = !isSystemMessage;
-                  const canDeleteMessage = userRole === 'admin';
+              <div
+                style={{
+                  height: '36px',
+                  background: 'linear-gradient(180deg, #5a5a5a 0%, #2f2f2f 100%)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '0 10px',
+                  color: '#f5f5f5',
+                  fontSize: '13px',
+                  fontWeight: 700
+                }}
+              >
+                <span>{channelLabel}</span>
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  <button
+                    type="button"
+                    onClick={closeChannelWindow}
+                    style={{ background: 'transparent', border: 0, color: '#fff', cursor: 'pointer', fontSize: '16px', lineHeight: 1 }}
+                    title="Minimaliseer"
+                  >
+                    _
+                  </button>
+                  <button
+                    type="button"
+                    onClick={closeChannelWindow}
+                    style={{ background: 'transparent', border: 0, color: '#fff', cursor: 'pointer', fontSize: '16px', lineHeight: 1 }}
+                    title="Sluit"
+                  >
+                    X
+                  </button>
+                </div>
+              </div>
 
-                  return (
-                    <div
-                      key={message.id}
-                      className="flex items-start gap-2 mb-0.5 rounded px-1 py-0.5 transition"
-                      style={{
-                        width: '100%',
-                        backgroundColor: chatDeleteHoverId === message.id ? 'rgba(127, 29, 29, 0.22)' : 'transparent',
-                        outline: chatDeleteHoverId === message.id ? '1px solid rgba(248, 113, 113, 0.35)' : 'none'
-                      }}
-                    >
-                      <div className="text-xs text-slate-100" style={{ lineHeight: 1.45, flex: '1 1 auto', minWidth: 0, display: 'flex', alignItems: 'flex-start' }}>
-                        <div style={{ display: 'inline-flex', alignItems: 'baseline', flexShrink: 0, whiteSpace: 'nowrap' }}>
-                          <span
-                            className="text-slate-500 mr-2 font-mono"
-                            style={{ display: 'inline-block', width: '68px', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}
-                          >
-                            [{formatChatTime(message.created_at)}]
-                          </span>
+              <div
+                ref={chatScrollRef}
+                onScroll={handleChatScroll}
+                style={{ maxHeight: `${chatWindowHeightPx}px`, minHeight: `${chatWindowHeightPx}px`, overflowY: 'auto', padding: '10px 10px 8px' }}
+              >
+                {activeChannel !== 'live' ? (
+                  <p style={{ fontSize: '12px', color: '#666' }}>
+                    Dit kanaal word nog opgebouwd.
+                  </p>
+                ) : chatLoading ? (
+                  <p style={{ fontSize: '12px', color: '#666' }}>Chat laden...</p>
+                ) : chatMessages.length === 0 ? (
+                  <p style={{ fontSize: '12px', color: '#666' }}>Nog geen berichten.</p>
+                ) : (
+                  chatMessages.map((message) => {
+                    const ownMessage = isOwnChatMessage(message);
+                    const displayName = formatDisplayUsername(message.username || 'Onbekend');
+                    const normalizedName = (displayName || '').trim().toLowerCase();
+                    const isSystemMessage = normalizedName === 'systeem' || normalizedName === 'system';
+                    const chatRole = ownMessage
+                      ? userRole
+                      : (chatUserRoles[getChatUsernameKey(message.username)] || 'lid');
+                    const nameClass = isSystemMessage ? 'text-emerald-400' : '';
+                    const nameStyle = isSystemMessage ? undefined : roleNameColorStyle(chatRole);
+                    const canOpenProfile = !isSystemMessage;
+                    const canDeleteMessage = userRole === 'admin';
+
+                    return (
+                      <div key={message.id} style={{ marginBottom: '8px', borderRadius: '6px', border: '1px solid #e5e7eb', background: '#ffffff', padding: '6px 8px' }}>
+                        <div style={{ fontSize: '12px', lineHeight: 1.35, color: '#111827' }}>
+                          <span style={{ color: '#6b7280', marginRight: '6px' }}>[{formatChatTime(message.created_at)}]</span>
                           {canOpenProfile ? (
                             <span
                               role="button"
@@ -2995,109 +3402,514 @@ export default function App() {
                                 event.preventDefault();
                                 void handleOpenChatProfile(message.username);
                               }}
-                              className={`${nameClass} font-semibold mr-2 cursor-pointer hover:underline focus:underline outline-none`}
-                              style={{ ...nameStyle, whiteSpace: 'nowrap' }}
-                              title={`Open profiel van ${displayName}`}
+                              className={`${nameClass} font-semibold cursor-pointer hover:underline`}
+                              style={{ ...nameStyle }}
                             >
                               {displayName}:
                             </span>
                           ) : (
-                            <span className={`${nameClass} font-semibold mr-2`} style={{ ...nameStyle, whiteSpace: 'nowrap' }}>{displayName}:</span>
+                            <span className={`${nameClass} font-semibold`} style={{ ...nameStyle }}>{displayName}:</span>
                           )}
+                          <span style={{ marginLeft: '6px' }}>{message.content}</span>
                         </div>
-
-                        <span className="text-slate-100 break-words" style={{ flex: '1 1 auto', minWidth: 0 }}>
-                          {message.content}
-                        </span>
+                        {canDeleteMessage && (
+                          <div style={{ marginTop: '4px' }}>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                void handleDeleteChatMessage(message.id);
+                              }}
+                              onMouseEnter={() => setChatDeleteHoverId(message.id)}
+                              onMouseLeave={() => setChatDeleteHoverId(null)}
+                              onFocus={() => setChatDeleteHoverId(message.id)}
+                              onBlur={() => setChatDeleteHoverId(null)}
+                              disabled={chatDeletingId === message.id}
+                              style={{ fontSize: '10px', border: '1px solid #fca5a5', borderRadius: '4px', padding: '1px 5px', background: '#fee2e2', color: '#7f1d1d' }}
+                            >
+                              {chatDeletingId === message.id ? '...' : 'X'}
+                            </button>
+                          </div>
+                        )}
                       </div>
+                    );
+                  })
+                )}
+              </div>
 
-                      {canDeleteMessage && (
+              <form
+                onSubmit={handleSendChatMessage}
+                style={{ borderTop: '1px solid #b8b8b8', padding: '8px', display: 'grid', gridTemplateColumns: '1fr auto', gap: '6px', background: '#d9d9d9' }}
+              >
+                <input
+                  type="text"
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  onKeyDown={handleChatInputKeyDown}
+                  placeholder={activeChannel === 'live' ? 'Type your message here...' : 'Kanaal nog in opbouw'}
+                  maxLength={280}
+                  disabled={activeChannel !== 'live'}
+                  style={{ border: '1px solid #b8b8b8', borderRadius: '4px', padding: '8px 10px', fontSize: '12px', background: '#ffffff', color: '#111827' }}
+                />
+                <button
+                  type="submit"
+                  disabled={activeChannel !== 'live' || chatSending || !chatInput.trim()}
+                  style={{ border: '1px solid #b8b8b8', borderRadius: '4px', padding: '8px 10px', fontSize: '12px', background: '#f3f4f6', color: '#374151', opacity: activeChannel !== 'live' || chatSending || !chatInput.trim() ? 0.6 : 1 }}
+                >
+                  Send
+                </button>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {isPrivateChatWindowOpen && selectedPrivateConversation && (
+          <div
+            style={{
+              position: 'fixed',
+              right: '10px',
+              bottom: '48px',
+              zIndex: 10001,
+              display: 'flex',
+              alignItems: 'flex-end',
+              justifyContent: 'flex-end',
+              maxWidth: 'calc(100vw - 20px)'
+            }}
+          >
+            <div
+              style={{
+                width: `min(${chatWindowWidthPx}px, calc(100vw - 20px))`,
+                border: '1px solid #4b4b4b',
+                borderRadius: '8px',
+                background: '#d9d9d9',
+                boxShadow: '0 14px 28px rgba(0,0,0,0.45)',
+                overflow: 'hidden'
+              }}
+            >
+              <div
+                style={{
+                  height: '36px',
+                  background: 'linear-gradient(180deg, #475569 0%, #1e293b 100%)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '0 10px',
+                  color: '#f5f5f5',
+                  fontSize: '13px',
+                  fontWeight: 700
+                }}
+              >
+                <span>Prive: {selectedPrivateConversation.actorName}</span>
+                <button
+                  type="button"
+                  onClick={() => setIsPrivateChatWindowOpen(false)}
+                  style={{ background: 'transparent', border: 0, color: '#fff', cursor: 'pointer', fontSize: '16px', lineHeight: 1 }}
+                  title="Sluit"
+                >
+                  X
+                </button>
+              </div>
+
+              <div style={{ maxHeight: `${chatWindowHeightPx}px`, minHeight: `${chatWindowHeightPx}px`, overflowY: 'auto', padding: '10px 10px 8px' }}>
+                {selectedPrivateMessages.length === 0 ? (
+                  <p style={{ fontSize: '12px', color: '#666' }}>Nog geen priveberichten in dit gesprek.</p>
+                ) : (
+                  selectedPrivateMessages.map((message) => {
+                    const fromSelf = String(message?.sender_id || '').trim() === ownId;
+                    return (
+                      <div
+                        key={message.id}
+                        style={{
+                          marginBottom: '8px',
+                          borderRadius: '6px',
+                          border: '1px solid #e5e7eb',
+                          background: fromSelf ? '#dcfce7' : '#ffffff',
+                          padding: '6px 8px'
+                        }}
+                      >
+                        <div style={{ fontSize: '11px', color: '#6b7280', marginBottom: '2px' }}>
+                          {fromSelf ? 'Jij' : selectedPrivateConversation.actorName} [{formatChatTime(message.created_at)}]
+                        </div>
+                        <div style={{ fontSize: '12px', color: '#111827', lineHeight: 1.35 }}>{message.content}</div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+
+              <div style={{ borderTop: '1px solid #b8b8b8', padding: '8px', display: 'grid', gridTemplateColumns: '1fr auto', gap: '6px', background: '#d9d9d9' }}>
+                {activeTypingLabel && (
+                  <div style={{ gridColumn: '1 / -1', fontSize: '11px', color: '#475569' }}>
+                    {activeTypingLabel} is aan het typen...
+                  </div>
+                )}
+                <input
+                  type="text"
+                  value={privateChatInput}
+                  onChange={(event) => {
+                    const nextValue = event.target.value;
+                    setPrivateChatInput(nextValue);
+                    void sendPrivateTypingSignal(selectedPrivateConversation, nextValue);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key !== 'Enter') return;
+                    event.preventDefault();
+                    void handleSendPrivateChatMessage(selectedPrivateConversation);
+                  }}
+                  placeholder={`Bericht naar ${selectedPrivateConversation.actorName}...`}
+                  maxLength={500}
+                  style={{ border: '1px solid #b8b8b8', borderRadius: '4px', padding: '8px 10px', fontSize: '12px', background: '#ffffff', color: '#111827' }}
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    void handleSendPrivateChatMessage(selectedPrivateConversation);
+                  }}
+                  disabled={privateChatSending || !privateChatInput.trim()}
+                  style={{ border: '1px solid #b8b8b8', borderRadius: '4px', padding: '8px 10px', fontSize: '12px', background: '#f3f4f6', color: '#374151', opacity: privateChatSending || !privateChatInput.trim() ? 0.6 : 1 }}
+                >
+                  Send
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {isChatConversationsMenuOpen && (
+          <div
+            data-chat-popover="conversations"
+            style={{
+              position: 'fixed',
+              right: '10px',
+              bottom: '50px',
+              zIndex: 10003,
+              width: 'min(360px, calc(100vw - 20px))',
+              maxHeight: 'min(560px, calc(100vh - 80px))',
+              overflow: 'auto',
+              border: '1px solid #4b4b4b',
+              borderRadius: '8px',
+              background: '#e6e6e6',
+              boxShadow: '0 14px 28px rgba(0,0,0,0.45)'
+            }}
+          >
+            <div style={{ height: '36px', background: 'linear-gradient(180deg, #475569 0%, #1e293b 100%)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 10px', color: '#f5f5f5', fontSize: '13px', fontWeight: 700 }}>
+              <span>Gesprekken</span>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsChatConversationsMenuOpen(false);
+                  setPrivateConversationSearchTerm('');
+                }}
+                style={{ background: 'transparent', border: 0, color: '#fff', cursor: 'pointer', fontSize: '20px', lineHeight: 1 }}
+                title="Sluit"
+              >
+                X
+              </button>
+            </div>
+            <div style={{ padding: '8px', display: 'grid', gap: '6px' }}>
+              <div style={{ border: '1px solid #b8b8b8', borderRadius: '6px', background: '#f8fafc', padding: '7px' }}>
+                <input
+                  type="text"
+                  value={privateConversationSearchTerm}
+                  onChange={(event) => setPrivateConversationSearchTerm(event.target.value)}
+                  placeholder="Zoek speler om nieuw gesprek te starten..."
+                  style={{ width: '100%', border: '1px solid #b8b8b8', borderRadius: '4px', padding: '7px 9px', fontSize: '12px', background: '#ffffff', color: '#111827' }}
+                />
+                {privateConversationSearchTerm.trim() ? (
+                  <div style={{ marginTop: '6px', display: 'grid', gap: '4px', maxHeight: '170px', overflowY: 'auto' }}>
+                    {searchableContacts.length === 0 ? (
+                      <p style={{ fontSize: '11px', color: '#6b7280' }}>Geen speler gevonden.</p>
+                    ) : (
+                      searchableContacts.map((contact) => (
                         <button
+                          key={contact.id}
                           type="button"
                           onClick={() => {
-                            void handleDeleteChatMessage(message.id);
+                            openPrivateConversation({
+                              key: contact.id,
+                              actorId: contact.id,
+                              actorName: contact.username
+                            });
+                            setPrivateConversationSearchTerm('');
                           }}
-                          onMouseEnter={() => setChatDeleteHoverId(message.id)}
-                          onMouseLeave={() => setChatDeleteHoverId(null)}
-                          onFocus={() => setChatDeleteHoverId(message.id)}
-                          onBlur={() => setChatDeleteHoverId(null)}
-                          disabled={chatDeletingId === message.id}
-                          className="text-[10px] px-1.5 py-0.5 border border-red-800/60 text-red-300 rounded hover:bg-red-950/40 disabled:opacity-50 disabled:cursor-not-allowed transition"
-                          style={{ flexShrink: 0, alignSelf: 'flex-start' }}
-                          title="Verwijder bericht"
+                          style={{ border: '1px solid #b8b8b8', borderRadius: '4px', padding: '5px 7px', background: '#ffffff', color: '#111827', textAlign: 'left', fontSize: '12px' }}
+                          title={`Start gesprek met ${contact.username}`}
                         >
-                          {chatDeletingId === message.id ? '...' : 'X'}
+                          {contact.username}
                         </button>
-                      )}
+                      ))
+                    )}
+                  </div>
+                ) : null}
+              </div>
+
+              {privateChatLoading ? (
+                <p style={{ fontSize: '12px', color: '#666' }}>Gesprekken laden...</p>
+              ) : privateChatError ? (
+                <p style={{ fontSize: '12px', color: '#991b1b' }}>{privateChatError}</p>
+              ) : privateConversations.length === 0 ? (
+                <p style={{ fontSize: '12px', color: '#666' }}>Nog geen gesprekken beschikbaar.</p>
+              ) : (
+                privateConversations.map((conversation) => {
+                  const unreadCount = Number(privateUnreadByConversation[conversation.key] || 0);
+                  const isBlocked = isPrivateActorBlocked(conversation.actorId);
+                  return (
+                    <div
+                      key={conversation.key}
+                      style={{
+                        border: '1px solid #b8b8b8',
+                        borderRadius: '6px',
+                        padding: '7px 9px',
+                        background: '#ffffff',
+                        color: '#111827',
+                        display: 'grid',
+                        gap: '6px'
+                      }}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => openPrivateConversation(conversation)}
+                        style={{ background: 'transparent', border: 0, padding: 0, textAlign: 'left', display: 'grid', gap: '3px' }}
+                      >
+                        <div style={{ fontSize: '12px', fontWeight: 700 }}>
+                          {conversation.actorName}{unreadCount > 0 ? ` (${unreadCount})` : ''}{isBlocked ? ' [Ignored]' : ''}
+                        </div>
+                        <div style={{ fontSize: '11px', color: '#6b7280' }}>{conversation.lastText || '(geen inhoud)'}</div>
+                      </button>
+                      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                        <button
+                          type="button"
+                          onClick={() => toggleIgnoreConversationActor(conversation.actorId)}
+                          style={{ border: '1px solid #b8b8b8', borderRadius: '4px', padding: '3px 6px', fontSize: '11px', background: '#f8fafc', color: '#0f172a' }}
+                        >
+                          {isBlocked ? 'Unignore' : 'Ignore'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => softDeleteConversation(conversation.key)}
+                          style={{ border: '1px solid #fecaca', borderRadius: '4px', padding: '3px 6px', fontSize: '11px', background: '#fef2f2', color: '#7f1d1d' }}
+                        >
+                          Verberg
+                        </button>
+                      </div>
                     </div>
                   );
                 })
               )}
             </div>
-
-            <form
-              onSubmit={handleSendChatMessage}
-              className="border-t border-slate-800 overflow-hidden"
-              style={{ display: 'grid', gridTemplateColumns: '1fr auto', width: '100%' }}
-            >
-              <input
-                type="text"
-                value={chatInput}
-                onChange={(e) => setChatInput(e.target.value)}
-                onKeyDown={handleChatInputKeyDown}
-                placeholder="Typ hier je bericht en druk Enter..."
-                maxLength={280}
-                className="min-w-0 px-4 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none"
-                style={{
-                  backgroundColor: '#020917',
-                  color: '#e5e7eb',
-                  caretColor: '#e5e7eb'
-                }}
-              />
-              <button
-                type="submit"
-                disabled={chatSending || !chatInput.trim()}
-                className="whitespace-nowrap px-4 py-2 text-sm font-bold disabled:opacity-50 disabled:cursor-not-allowed transition"
-                style={{ backgroundColor: '#6ee7b7', color: '#0f172a', minWidth: '112px' }}
-              >
-                Verstuur
-              </button>
-            </form>
           </div>
-        ) : (
+        )}
+
+        {isChatSettingsMenuOpen && (
+          <div
+            data-chat-popover="settings"
+            style={{
+              position: 'fixed',
+              right: `${settingsRightPx}px`,
+              bottom: `${settingsBottomPx}px`,
+              zIndex: 10002,
+              width: 'min(360px, calc(100vw - 20px))',
+              maxHeight: 'min(560px, calc(100vh - 80px))',
+              overflow: 'auto',
+              border: '1px solid #4b4b4b',
+              borderRadius: '8px',
+              background: '#e6e6e6',
+              boxShadow: '0 14px 28px rgba(0,0,0,0.45)'
+            }}
+          >
+            <div style={{ height: '36px', background: 'linear-gradient(180deg, #0e7490 0%, #155e75 100%)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 10px', color: '#f5f5f5', fontSize: '13px', fontWeight: 700 }}>
+              <span>Chat instellingen</span>
+              <button
+                type="button"
+                onClick={() => setIsChatSettingsMenuOpen(false)}
+                style={{ background: 'transparent', border: 0, color: '#fff', cursor: 'pointer', fontSize: '20px', lineHeight: 1 }}
+                title="Sluit"
+              >
+                X
+              </button>
+            </div>
+
+            <div style={{ padding: '10px', display: 'grid', gap: '10px' }}>
+              <div style={{ display: 'grid', gap: '6px' }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setChatUnreadCount(0);
+                  }}
+                  style={{ border: '1px solid #b8b8b8', borderRadius: '6px', padding: '8px 10px', background: '#ffffff', color: '#111827', textAlign: 'left', fontSize: '12px', fontWeight: 700 }}
+                >
+                  Markeer Global als gelezen
+                </button>
+              </div>
+
+              <label style={{ fontSize: '12px', color: '#111827', display: 'grid', gap: '4px' }}>
+                Hoogte ({chatWindowHeightPercent}%)
+                <input
+                  type="range"
+                  min={70}
+                  max={130}
+                  value={chatWindowHeightPercent}
+                  onChange={(event) => setChatWindowHeightPercent(Number(event.target.value))}
+                />
+              </label>
+
+              <label style={{ fontSize: '12px', color: '#111827', display: 'grid', gap: '4px' }}>
+                Breedte ({chatWindowWidthPercent}%)
+                <input
+                  type="range"
+                  min={70}
+                  max={130}
+                  value={chatWindowWidthPercent}
+                  onChange={(event) => setChatWindowWidthPercent(Number(event.target.value))}
+                />
+              </label>
+
+              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', color: '#111827' }}>
+                <input
+                  type="checkbox"
+                  checked={chatUseBubbles}
+                  onChange={(event) => setChatUseBubbles(event.target.checked)}
+                />
+                Bubbles tonen
+              </label>
+
+              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', color: '#111827' }}>
+                <input
+                  type="checkbox"
+                  checked={chatShowAvatars}
+                  onChange={(event) => setChatShowAvatars(event.target.checked)}
+                />
+                Avatars tonen
+              </label>
+            </div>
+          </div>
+        )}
+
+        <div
+          style={{
+            position: 'fixed',
+            right: '10px',
+            bottom: '8px',
+            zIndex: 10000,
+            display: 'flex',
+            gap: '4px',
+            background: 'rgba(25,25,25,0.95)',
+            padding: '4px',
+            borderRadius: '6px',
+            border: '1px solid #3f3f46',
+            maxWidth: 'calc(100vw - 20px)',
+            overflowX: 'auto'
+          }}
+        >
           <button
             type="button"
             onClick={() => {
-              setIsChatWidgetOpen(true);
-              setChatUnreadCount(0);
-              shouldAutoScrollChatRef.current = true;
-              requestAnimationFrame(() => {
-                scrollChatToBottom();
-              });
+              if (isChatWidgetOpen && isGlobalChatWindowOpen && activeChannel === 'live') {
+                closeChannelWindow();
+                return;
+              }
+              openChannelWindow('live');
             }}
-            className="px-4 py-2 rounded-xl border border-slate-700 bg-slate-900 text-slate-100 text-sm font-semibold shadow-lg hover:bg-slate-800"
-            style={{ marginLeft: 'auto', display: 'block', position: 'relative' }}
+            className={`px-2.5 py-1.5 text-xs rounded border whitespace-nowrap ${isChatWidgetOpen && isGlobalChatWindowOpen && activeChannel === 'live' ? 'border-emerald-600 bg-emerald-900/40 text-emerald-200' : 'border-slate-700 bg-slate-900 text-slate-200 hover:bg-slate-800'}`}
           >
-            💬 Live Chat
-            {chatUnreadCount > 0 && (
-              <span
-                className="rounded-full"
-                style={{
-                  position: 'absolute',
-                  top: '-4px',
-                  right: '-4px',
-                  width: '12px',
-                  height: '12px',
-                  backgroundColor: '#ef4444',
-                  border: '1px solid rgba(255,255,255,0.45)',
-                  boxShadow: '0 0 0 2px rgba(2, 9, 23, 0.9)'
-                }}
-                title="Nieuwe chatberichten"
-              />
-            )}
+            Global{chatUnreadCount > 0 ? ` (${chatUnreadCount})` : ''}
           </button>
-        )}
-      </div>,
+
+          <button
+            type="button"
+            onClick={() => {
+              if (isChatWidgetOpen && isGlobalChatWindowOpen && activeChannel === 'trade') {
+                closeChannelWindow();
+                return;
+              }
+              openChannelWindow('trade');
+            }}
+            className={`px-2.5 py-1.5 text-xs rounded border whitespace-nowrap ${isChatWidgetOpen && isGlobalChatWindowOpen && activeChannel === 'trade' ? 'border-cyan-600 bg-cyan-900/40 text-cyan-200' : 'border-slate-700 bg-slate-900 text-slate-200 hover:bg-slate-800'}`}
+          >
+            Trade
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              if (isChatWidgetOpen && isGlobalChatWindowOpen && activeChannel === 'faction') {
+                closeChannelWindow();
+                return;
+              }
+              openChannelWindow('faction');
+            }}
+            className={`px-2.5 py-1.5 text-xs rounded border whitespace-nowrap ${isChatWidgetOpen && isGlobalChatWindowOpen && activeChannel === 'faction' ? 'border-cyan-600 bg-cyan-900/40 text-cyan-200' : 'border-slate-700 bg-slate-900 text-slate-200 hover:bg-slate-800'}`}
+          >
+            Faction
+          </button>
+
+          <button
+            type="button"
+            onClick={openConversationsMenu}
+            data-chat-popover-toggle="conversations"
+            className={`px-2.5 py-1.5 text-xs rounded border whitespace-nowrap ${isChatConversationsMenuOpen ? 'border-cyan-600 bg-cyan-900/40 text-cyan-200' : 'border-slate-700 bg-slate-900 text-slate-200 hover:bg-slate-800'}`}
+          >
+            Gesprekken{unreadPrivateTotal > 0 ? ` (${unreadPrivateTotal})` : ''}
+          </button>
+
+          {openPrivateConversationKeys.map((conversationKey) => {
+            const conversation = privateConversations.find((entry) => entry.key === conversationKey) || (() => {
+              const fallbackContact = privateContacts.find(
+                (entry) => String(entry?.id || '').trim() === conversationKey
+              );
+              if (!fallbackContact) return null;
+              return {
+                key: conversationKey,
+                actorId: conversationKey,
+                actorName: formatDisplayUsername(fallbackContact.username || 'Onbekend')
+              };
+            })();
+            if (!conversation) return null;
+            const unreadCount = Number(privateUnreadByConversation[conversationKey] || 0);
+            const isActive = activePrivateConversationKey === conversationKey && isPrivateChatWindowOpen;
+            return (
+              <div key={conversationKey} style={{ display: 'flex', gap: '2px' }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (isActive) {
+                      setIsPrivateChatWindowOpen(false);
+                      return;
+                    }
+                    setActivePrivateConversationKey(conversationKey);
+                    setIsPrivateChatWindowOpen(true);
+                    setIsGlobalChatWindowOpen(false);
+                    setIsChatConversationsMenuOpen(false);
+                    setPrivateUnreadByConversation((prev) => ({ ...prev, [conversationKey]: 0 }));
+                  }}
+                  className={`px-2 py-1.5 text-xs rounded border whitespace-nowrap ${isActive ? 'border-emerald-600 bg-emerald-900/40 text-emerald-200' : 'border-slate-700 bg-slate-900 text-slate-200 hover:bg-slate-800'}`}
+                  title={conversation.actorName}
+                >
+                  {conversation.actorName}{unreadCount > 0 ? ` (${unreadCount})` : ''}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => closePrivateConversation(conversationKey)}
+                  className="px-1.5 py-1.5 text-xs rounded border border-slate-700 bg-slate-900 text-slate-200 hover:bg-slate-800"
+                  title="Sluit gesprek"
+                >
+                  x
+                </button>
+              </div>
+            );
+          })}
+
+          <button
+            type="button"
+            onClick={() => {
+              setIsChatSettingsMenuOpen((prev) => !prev);
+            }}
+            data-chat-popover-toggle="settings"
+            className={`px-2.5 py-1.5 text-xs rounded border whitespace-nowrap ${isChatSettingsMenuOpen ? 'border-cyan-600 bg-cyan-900/40 text-cyan-200' : 'border-slate-700 bg-slate-900 text-slate-200 hover:bg-slate-800'}`}
+          >
+            Instellingen
+          </button>
+        </div>
+      </>,
       document.body
     );
   };
@@ -3195,17 +4007,6 @@ export default function App() {
     return (
       <aside className="left-utility-menu" aria-label="Snelle navigatie">
         <div className="left-utility-title">Algemeen</div>
-        <button
-          type="button"
-          className="left-utility-item"
-          onClick={() => {
-            setCityMenuOpen(false);
-            setInboxFilter('received');
-            setCurrentView('inbox');
-          }}
-        >
-          Inbox{inboxUnreadCount > 0 ? ` (${inboxUnreadCount})` : ''}
-        </button>
         <button
           type="button"
           className="left-utility-item"
@@ -3354,38 +4155,6 @@ export default function App() {
                 >
                   {usernameLabel}
                 </span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setInboxFilter('received');
-                    setCurrentView('inbox');
-                  }}
-                  className="relative p-1 rounded-md border border-slate-700 text-slate-300 bg-slate-800 hover:text-white transition"
-                  title="Open inbox"
-                  aria-label="Open inbox"
-                >
-                  <Mail className="h-3.5 w-3.5" />
-                  {inboxUnreadCount > 0 && (
-                    <span
-                      className="rounded-full text-[9px] font-bold leading-none flex items-center justify-center"
-                      style={{
-                        position: 'absolute',
-                        top: '-7px',
-                        right: '-7px',
-                        minWidth: '16px',
-                        height: '16px',
-                        padding: '0 4px',
-                        backgroundColor: '#ef4444',
-                        color: '#ffffff',
-                        border: '1px solid rgba(255,255,255,0.45)',
-                        boxShadow: '0 0 0 2px rgba(2, 9, 23, 0.9)'
-                      }}
-                      title="Nieuwe priveberichten"
-                    >
-                      {inboxUnreadCount > 99 ? '99+' : inboxUnreadCount}
-                    </span>
-                  )}
-                </button>
               </div>
               <p className="text-xs mt-0.5 leading-tight text-slate-400">LVL {stats?.level || 1}</p>
               <p className="text-xs text-emerald-400 font-mono mt-0.5 leading-tight">${stats?.cash?.toLocaleString() || 0}</p>
@@ -3396,7 +4165,7 @@ export default function App() {
             <div>
               <div className="flex justify-between items-center text-xs uppercase tracking-wide text-slate-300 leading-tight">
                 <span>Energy</span>
-                <span className="font-mono text-slate-400 text-xs">{energyCurrent}/{energyMax} • {energyTimerText}</span>
+                <span className="font-mono text-slate-400 text-xs">{energyCurrent}/{energyMax}  {energyTimerText}</span>
               </div>
               <div className="w-full rounded-sm mt-0.5 overflow-hidden" style={{ height: '6px', background: '#111827', border: '1px solid #374151' }}>
                 <div style={{ height: '100%', width: `${energyPercent}%`, background: 'linear-gradient(90deg, #facc15, #f97316)' }} />
@@ -3406,7 +4175,7 @@ export default function App() {
             <div>
               <div className="flex justify-between items-center text-xs uppercase tracking-wide text-slate-300 leading-tight">
                 <span>Nerve</span>
-                <span className="font-mono text-slate-400 text-xs">{nerveCurrent}/{nerveMax} • {nerveTimerText}</span>
+                <span className="font-mono text-slate-400 text-xs">{nerveCurrent}/{nerveMax}  {nerveTimerText}</span>
               </div>
               <div className="w-full rounded-sm mt-0.5 overflow-hidden" style={{ height: '6px', background: '#111827', border: '1px solid #374151' }}>
                 <div style={{ height: '100%', width: `${nervePercent}%`, background: 'linear-gradient(90deg, #fb7185, #ef4444)' }} />
@@ -3437,7 +4206,7 @@ export default function App() {
         await refreshPrisonMembers();
       } catch (_error) {
         setPrisonMembers([]);
-        addLog('❌ Gevangenisleden laden mislukt.', 'error');
+        addLog('Gevangenisleden laden mislukt.', 'error');
       } finally {
         setPrisonLoading(false);
       }
@@ -3542,253 +4311,6 @@ export default function App() {
     const timer = setTimeout(() => setAdminNotice(null), 3500);
     return () => clearTimeout(timer);
   }, [adminNotice]);
-
-  useEffect(() => {
-    if (currentView !== 'inbox' || !user?.id) return;
-    void refreshInboxData();
-  }, [currentView, user?.id]);
-
-  useEffect(() => {
-    if (!user?.id) return;
-
-    const ownId = String(user.id);
-    const channel = supabase
-      .channel(`private-messages-live-${ownId}`)
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'private_messages' },
-        (payload) => {
-          const incoming = payload.new;
-          if (!incoming?.id) return;
-          if (isInboxMetaMessage(incoming)) return;
-
-          const senderId = String(incoming.sender_id || '');
-          const recipientId = String(incoming.recipient_id || '');
-          const isParticipant = senderId === ownId || recipientId === ownId;
-          if (!isParticipant) return;
-
-          setInboxMessages((prev) => {
-            if (prev.some((message) => message.id === incoming.id)) return prev;
-            return [incoming, ...prev].slice(0, 250);
-          });
-
-          setInboxContacts((prev) => {
-            if (senderId === ownId) return prev;
-            if (!senderId || prev.some((member) => String(member.id) === senderId)) return prev;
-            return [
-              ...prev,
-              {
-                id: senderId,
-                username: incoming.sender_username || 'Onbekend',
-                role: 'lid'
-              }
-            ];
-          });
-
-          const isIncomingForCurrentUser = recipientId === ownId && senderId !== ownId;
-          if (isIncomingForCurrentUser && currentView !== 'inbox') {
-            setInboxUnreadCount((prev) => prev + 1);
-          }
-
-          if (isIncomingForCurrentUser && incoming?.id) {
-            inboxLatestIncomingIdRef.current = String(incoming.id);
-          }
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [user?.id, currentView]);
-
-  useEffect(() => {
-    if (currentView !== 'inbox') return;
-    setInboxUnreadCount(0);
-  }, [currentView]);
-
-  useEffect(() => {
-    if (!user?.id) {
-      inboxMetaHydratedRef.current = false;
-      inboxMetaMessageIdRef.current = '';
-      inboxMetaLastSavedPayloadRef.current = '';
-      setInboxBlockedUserIds([]);
-      setInboxDeletedMessageIds([]);
-      setInboxReportFallbackEntries([]);
-      return;
-    }
-
-    let cancelled = false;
-    inboxMetaHydratedRef.current = false;
-
-    const localBlocked = normalizeIdList(readJsonArrayFromStorage(getInboxBlockedStorageKey(user.id)));
-    const localDeleted = normalizeIdList(readJsonArrayFromStorage(getInboxDeletedStorageKey(user.id)));
-    const localReports = normalizeInboxReports(readJsonArrayFromStorage(getInboxReportsStorageKey(user.id)));
-
-    setInboxBlockedUserIds(localBlocked);
-    setInboxDeletedMessageIds(localDeleted);
-    setInboxReportFallbackEntries(localReports);
-
-    const load = async () => {
-      try {
-        await loadInboxMetaForUser(user.id, localBlocked, localDeleted, localReports);
-      } catch (_error) {
-        // Als cloud ophalen faalt, blijven lokale waarden actief.
-      } finally {
-        if (!cancelled) {
-          inboxMetaHydratedRef.current = true;
-        }
-      }
-    };
-
-    void load();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [user?.id]);
-
-  useEffect(() => {
-    if (!user?.id) return;
-
-    try {
-      const normalized = normalizeIdList(inboxBlockedUserIds);
-      writeJsonArrayToStorage(getInboxBlockedStorageKey(user.id), normalized);
-    } catch (_error) {
-      // Negeer lokale opslagfouten; blokkeren blijft in-memory actief.
-    }
-  }, [user?.id, inboxBlockedUserIds]);
-
-  useEffect(() => {
-    if (!user?.id) return;
-
-    try {
-      const normalized = normalizeIdList(inboxDeletedMessageIds);
-      writeJsonArrayToStorage(getInboxDeletedStorageKey(user.id), normalized);
-    } catch (_error) {
-      // Negeer lokale opslagfouten; lokale verbergstatus blijft in-memory actief.
-    }
-  }, [user?.id, inboxDeletedMessageIds]);
-
-  useEffect(() => {
-    if (!user?.id) return;
-
-    try {
-      const normalized = normalizeInboxReports(inboxReportFallbackEntries);
-      writeJsonArrayToStorage(getInboxReportsStorageKey(user.id), normalized);
-    } catch (_error) {
-      // Rapport-fallback blijft in-memory beschikbaar.
-    }
-  }, [user?.id, inboxReportFallbackEntries]);
-
-  useEffect(() => {
-    if (!user?.id) return;
-    if (!inboxMetaHydratedRef.current) return;
-
-    const timer = setTimeout(() => {
-      void (async () => {
-        const saved = await persistInboxMetaToCloud(
-          user.id,
-          inboxBlockedUserIds,
-          inboxDeletedMessageIds,
-          inboxReportFallbackEntries
-        );
-        if (!saved) {
-          addLog('⚠️ Inbox voorkeuren synchroniseren met cloud mislukt; lokale fallback blijft actief.', 'info');
-        }
-      })();
-    }, 300);
-
-    return () => clearTimeout(timer);
-  }, [user?.id, inboxBlockedUserIds, inboxDeletedMessageIds, inboxReportFallbackEntries]);
-
-  useEffect(() => {
-    const recipientId = String(inboxRecipientId || '').trim();
-    if (!recipientId) return;
-    if (!inboxBlockedUserIds.some((blockedId) => String(blockedId) === recipientId)) return;
-    setInboxRecipientId('');
-  }, [inboxRecipientId, inboxBlockedUserIds]);
-
-  useEffect(() => {
-    if (currentView === 'inbox') return;
-    setIsInboxComposeOpen(false);
-  }, [currentView]);
-
-  useEffect(() => {
-    if (!user?.id) {
-      inboxLatestIncomingIdRef.current = '';
-      setInboxUnreadCount(0);
-      return;
-    }
-
-    const ownId = String(user.id);
-    let cancelled = false;
-
-    const pollLatestIncoming = async () => {
-      try {
-        const { data, error } = await supabase
-          .from('private_messages')
-          .select('id, sender_id, sender_username, recipient_id, recipient_username, subject, content, created_at')
-          .eq('recipient_id', ownId)
-          .order('created_at', { ascending: false })
-          .limit(10);
-
-        if (error || cancelled || !data || data.length === 0) return;
-
-        const visibleData = data.filter((message) => !isInboxMetaMessage(message));
-        if (visibleData.length === 0) return;
-
-        const latestId = String(visibleData[0]?.id || '');
-        if (!latestId) return;
-
-        const knownId = inboxLatestIncomingIdRef.current;
-        if (!knownId) {
-          setInboxMessages((prev) => {
-            const existingIds = new Set(prev.map((message) => message.id));
-            const uniqueIncoming = visibleData.filter((message) => !existingIds.has(message.id));
-            if (uniqueIncoming.length === 0) return prev;
-            return [...uniqueIncoming, ...prev].slice(0, 250);
-          });
-          inboxLatestIncomingIdRef.current = latestId;
-          return;
-        }
-
-        if (latestId === knownId) return;
-
-        const knownIndex = visibleData.findIndex((message) => String(message?.id || '') === knownId);
-        const newMessages = knownIndex === -1 ? [visibleData[0]] : visibleData.slice(0, knownIndex);
-        if (newMessages.length === 0) {
-          inboxLatestIncomingIdRef.current = latestId;
-          return;
-        }
-
-        setInboxMessages((prev) => {
-          const existingIds = new Set(prev.map((message) => message.id));
-          const uniqueIncoming = newMessages.filter((message) => !existingIds.has(message.id));
-          if (uniqueIncoming.length === 0) return prev;
-          return [...uniqueIncoming, ...prev].slice(0, 250);
-        });
-
-        if (currentView !== 'inbox') {
-          setInboxUnreadCount((prev) => prev + newMessages.length);
-        }
-
-        inboxLatestIncomingIdRef.current = latestId;
-      } catch (_error) {
-        // Stil: fallback polling mag de app niet storen bij tijdelijke netwerkfouten.
-      }
-    };
-
-    void pollLatestIncoming();
-    const interval = setInterval(() => {
-      void pollLatestIncoming();
-    }, 2500);
-
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [user?.id, currentView]);
 
   useEffect(() => {
     if (!user) return;
@@ -4063,7 +4585,7 @@ export default function App() {
 
         <main className="flex-grow p-6">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl max-w-2xl mx-auto">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-4">👤 Mijn profiel</h3>
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-4">Mijn profiel</h3>
             <div className="bg-slate-950 border border-slate-850 rounded-xl p-4 space-y-2.5 text-sm">
               <div className="flex items-center gap-3">
                   <div className="rounded-xl border border-slate-700 overflow-hidden" style={{ width: '72px', height: '72px', background: '#0b1220' }}>
@@ -4171,7 +4693,7 @@ export default function App() {
 
         <main className="flex-grow p-6">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl max-w-4xl mx-auto">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-4">🛠️ Spelerbeheer</h3>
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-4">Spelerbeheer</h3>
 
             <div className="mb-4 flex flex-col sm:flex-row gap-2 sm:items-center sm:justify-between">
               <input
@@ -4219,8 +4741,8 @@ export default function App() {
                       >
                         <p className="text-sm font-semibold" style={roleNameColorStyle(member.role)}>{formatDisplayUsername(member.username || 'Onbekend')}</p>
                         <p className="text-xs text-slate-400">
-                          Level {member.level || 1} • ${member.cash?.toLocaleString() || 0}
-                          {' • '}
+                          Level {member.level || 1} | ${member.cash?.toLocaleString() || 0}
+                          {' | '}
                           <span className={roleColorClass(member.role)}>
                             {roleLabel(member.role)}
                           </span>
@@ -4375,8 +4897,8 @@ export default function App() {
         <main className="flex-grow p-6">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl max-w-3xl mx-auto">
             <div className="flex justify-between items-center mb-3 gap-2">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">👥 Ledenlijst</h3>
-              <span className="text-xs text-slate-500">{onlineMembersCount} online • {onlineMembers.length} spelers</span>
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">Ledenlijst</h3>
+              <span className="text-xs text-slate-500">{onlineMembersCount} online | {onlineMembers.length} spelers</span>
             </div>
 
             <div className="mb-3">
@@ -4426,7 +4948,7 @@ export default function App() {
                     </div>
                     <span className="text-xs text-slate-400 font-mono">
                       Level {member.level || 1}
-                      {' • '}
+                      {' | '}
                       <span className={roleColorClass(member.role)}>{roleLabel(member.role)}</span>
                     </span>
                   </button>
@@ -4500,13 +5022,15 @@ export default function App() {
               <p className="text-slate-300"><span className="text-slate-500">Laatst gezien:</span> {formatLastSeenLabel(selectedMemberProfile?.last_updated, selectedMemberProfile)}</p>
 
               {selectedMemberProfile?.id && selectedMemberProfile.id !== user?.id && (
-                <button
-                  type="button"
-                  onClick={() => openInboxComposeForMember(selectedMemberProfile)}
-                  className="mt-2 px-3 py-2 text-xs text-slate-300 bg-slate-800 rounded-lg border"
-                >
-                  Stuur bericht
-                </button>
+                <div className="mt-2">
+                  <button
+                    type="button"
+                    onClick={() => startPrivateConversation(selectedMemberProfile)}
+                    className="px-3 py-1.5 text-xs rounded-md border border-emerald-700 text-emerald-300 hover:bg-emerald-950/30"
+                  >
+                    Start privechat
+                  </button>
+                </div>
               )}
             </div>
           </div>
@@ -4548,7 +5072,7 @@ export default function App() {
 
         <main className="flex-grow p-6">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl max-w-3xl mx-auto">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-4">💀 Misdaad operaties</h3>
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-4">Misdaad operaties</h3>
 
             {actionNotice && (
               <div className={`mb-4 rounded-xl border p-3 text-xs ${actionNotice.type === 'error' ? 'bg-red-950/30 border-red-800/40 text-red-200' : 'bg-emerald-950/30 border-emerald-800/40 text-emerald-200'}`}>
@@ -4570,7 +5094,7 @@ export default function App() {
                 className="w-full bg-slate-950 hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed text-white p-3.5 rounded-xl border border-slate-800 flex justify-between items-center transition"
               >
                 <div className="flex items-center gap-3">
-                  <span className="text-2xl">👛</span>
+                  <span className="text-[10px] font-mono text-slate-500 border border-slate-700 rounded px-1.5 py-0.5">PK</span>
                   <div className="text-left">
                     <p className="text-sm font-semibold">Toerist Rollen</p>
                     <p className="text-xs text-slate-400">75% kans op succes (Makkelijk)</p>
@@ -4585,7 +5109,7 @@ export default function App() {
                 className="w-full bg-slate-950 hover:bg-rose-950/20 hover:border-rose-900/40 disabled:opacity-50 disabled:cursor-not-allowed text-white p-3.5 rounded-xl border border-slate-800 flex justify-between items-center transition"
               >
                 <div className="flex items-center gap-3">
-                  <span className="text-2xl">🏦</span>
+                  <span className="text-[10px] font-mono text-slate-500 border border-slate-700 rounded px-1.5 py-0.5">HEIST</span>
                   <div className="text-left">
                     <p className="text-sm font-semibold text-rose-300">Grote Kluis Overvallen</p>
                     <p className="text-xs text-slate-400">Hoog risico op arrestatie, gigantische buit</p>
@@ -4633,7 +5157,7 @@ export default function App() {
 
         <main className="flex-grow p-6">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl max-w-3xl mx-auto">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-4">🏋️ Sporten</h3>
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-4">Sporten</h3>
 
             {actionNotice && (
               <div className={`mb-4 rounded-xl border p-3 text-xs ${actionNotice.type === 'error' ? 'bg-red-950/30 border-red-800/40 text-red-200' : 'bg-emerald-950/30 border-emerald-800/40 text-emerald-200'}`}>
@@ -4654,7 +5178,7 @@ export default function App() {
               className="w-full bg-slate-950 hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed text-white p-3.5 rounded-xl border border-slate-800 flex justify-between items-center transition"
             >
               <div className="flex items-center gap-3">
-                <span className="text-2xl">🏋️‍♂️</span>
+                <span className="text-[10px] font-mono text-slate-500 border border-slate-700 rounded px-1.5 py-0.5">GYM</span>
                 <div className="text-left">
                   <p className="text-sm font-semibold">Sportschool</p>
                   <p className="text-xs text-slate-400">Verhoog permanent je kracht</p>
@@ -4703,7 +5227,7 @@ export default function App() {
 
         <main className="flex-grow p-6">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl max-w-4xl mx-auto">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-4">🔒 Celstatus</h3>
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-4">Celstatus</h3>
 
             {jailTime > 0 ? (
               <div className="bg-red-950/40 border border-red-800/40 rounded-xl p-4">
@@ -4746,7 +5270,7 @@ export default function App() {
 
             <div className="mt-6 border-t border-slate-800 pt-4">
               <div className="flex justify-between items-center mb-3">
-                <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">🧍 Gevangenen helpen</h4>
+                <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">Gevangenen helpen</h4>
                 <span className="text-xs text-slate-500">{rescueTargets.length} opgesloten</span>
               </div>
 
@@ -4766,7 +5290,7 @@ export default function App() {
                         <div className="flex flex-wrap justify-between items-center gap-3">
                           <div>
                             <p className="text-sm font-semibold text-slate-200">{formatDisplayUsername(member.username || 'Onbekend')}</p>
-                            <p className="text-xs text-slate-400">Level {member.level || 1} • Nog {remaining} sec vast</p>
+                            <p className="text-xs text-slate-400">Level {member.level || 1} | Nog {remaining} sec vast</p>
                           </div>
                           <div className="flex items-center gap-2">
                             <button
@@ -4784,352 +5308,6 @@ export default function App() {
                               Uitbreken ({rescueChance}%)
                             </button>
                           </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          </div>
-        </main>
-        {renderLeftUtilityMenu()}
-        {renderLiveChatWidget()}
-      </div>
-    );
-  }
-
-if (currentView === 'inbox') {
-    const ownId = String(user?.id || '');
-    const blockedUserIdSet = new Set((inboxBlockedUserIds || []).map((value) => String(value)));
-    const deletedMessageIdSet = new Set((inboxDeletedMessageIds || []).map((value) => String(value)));
-    const reportedMessageIdSet = new Set(
-      (inboxReportFallbackEntries || [])
-        .map((entry) => String(entry?.id || '').trim())
-        .filter(Boolean)
-    );
-    const isStaffInboxView = STAFF_ROLES.includes(userRole);
-    const reportedEntriesForStaff = [...(inboxReportFallbackEntries || [])]
-      .filter((entry) => entry && typeof entry === 'object')
-      .sort((a, b) => new Date(b?.reportedAt || 0).getTime() - new Date(a?.reportedAt || 0).getTime());
-    const blockedUserNameMap = new Map();
-    inboxContacts.forEach((member) => {
-      const memberId = String(member?.id || '').trim();
-      if (!memberId) return;
-      blockedUserNameMap.set(memberId, formatDisplayUsername(member?.username || 'Onbekend'));
-    });
-    inboxMessages.forEach((message) => {
-      const senderId = String(message?.sender_id || '').trim();
-      const recipientId = String(message?.recipient_id || '').trim();
-      if (senderId && !blockedUserNameMap.has(senderId)) {
-        blockedUserNameMap.set(senderId, formatDisplayUsername(message?.sender_username || 'Onbekend'));
-      }
-      if (recipientId && !blockedUserNameMap.has(recipientId)) {
-        blockedUserNameMap.set(recipientId, formatDisplayUsername(message?.recipient_username || 'Onbekend'));
-      }
-    });
-    const blockedUsersSummary = inboxBlockedUserIds.map((blockedId) => ({
-      id: String(blockedId || '').trim(),
-      username: blockedUserNameMap.get(String(blockedId || '').trim()) || 'Onbekend'
-    })).filter((entry) => entry.id);
-    const visibleInboxContacts = inboxContacts.filter((member) => !blockedUserIdSet.has(String(member.id || '')));
-    const filteredMessages = inboxMessages.filter((message) => {
-      const messageId = String(message?.id || '');
-      if (messageId && deletedMessageIdSet.has(messageId)) return false;
-      const isReceived = String(message?.recipient_id || '') === ownId;
-      const actorId = String(isReceived ? message?.sender_id : message?.recipient_id || '');
-      if (actorId && blockedUserIdSet.has(actorId)) return false;
-      return inboxFilter === 'received' ? isReceived : !isReceived;
-    });
-
-    const blockedMessageCount = inboxMessages.filter((message) => {
-      const isReceived = String(message?.recipient_id || '') === ownId;
-      const actorId = String(isReceived ? message?.sender_id : message?.recipient_id || '');
-      return actorId && blockedUserIdSet.has(actorId);
-    }).length;
-
-    const selectedRecipient = visibleInboxContacts.find((member) => String(member.id) === String(inboxRecipientId || ''));
-
-    return (
-      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans app-with-left-utility">
-        <header className="bg-slate-900 border-b border-slate-800 py-4 px-6 flex flex-wrap justify-between items-center gap-4">
-          <div className="flex items-center gap-3">
-            {renderHeaderPlayerInfo()}
-          </div>
-          <div className="flex items-center gap-2">
-            {canOpenStaffPanel && (
-              <button
-                onClick={() => setCurrentView('admin')}
-                className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
-                title="Open admin functies"
-              >
-                Admin
-              </button>
-            )}
-            <button
-              onClick={() => setCurrentView('members')}
-              className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
-              title="Toon leden"
-            >
-              Leden
-            </button>
-          </div>
-        </header>
-
-        {renderTopTabs()}
-
-        <main className="flex-grow p-6">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl max-w-4xl mx-auto space-y-4">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">📨 Inbox</h3>
-
-            {actionNotice && (
-              <div className={`rounded-xl border p-3 text-xs ${actionNotice.type === 'error' ? 'bg-red-950/30 border-red-800/40 text-red-200' : 'bg-emerald-950/30 border-emerald-800/40 text-emerald-200'}`}>
-                {actionNotice.text}
-              </div>
-            )}
-
-            <div className="flex justify-end">
-              <button
-                type="button"
-                onClick={() => setIsInboxComposeOpen((prev) => !prev)}
-                className="px-3 py-1.5 text-xs rounded text-slate-200 bg-slate-800"
-              >
-                {isInboxComposeOpen ? 'Sluit nieuw bericht' : 'Nieuw bericht'}
-              </button>
-            </div>
-
-            {isInboxComposeOpen && (
-              <div className="bg-slate-950 p-4 space-y-3 rounded-xl">
-                <div className="grid gap-2">
-                  <label className="text-[11px] text-slate-400" htmlFor="inbox-recipient">Ontvanger</label>
-                  <select
-                    id="inbox-recipient"
-                    value={inboxRecipientId}
-                    onChange={(e) => setInboxRecipientId(e.target.value)}
-                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-rose-500"
-                  >
-                    <option value="">Kies een speler</option>
-                    {visibleInboxContacts.map((member) => (
-                      <option key={member.id} value={member.id}>{formatDisplayUsername(member.username || 'Onbekend')}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="grid gap-2">
-                  <label className="text-[11px] text-slate-400" htmlFor="inbox-subject">Onderwerp</label>
-                  <input
-                    id="inbox-subject"
-                    type="text"
-                    value={inboxSubject}
-                    onChange={(e) => setInboxSubject(e.target.value)}
-                    placeholder="Onderwerp"
-                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-rose-500"
-                  />
-                </div>
-
-                <div className="grid gap-2">
-                  <label className="text-[11px] text-slate-400" htmlFor="inbox-body">Bericht</label>
-                  <textarea
-                    id="inbox-body"
-                    value={inboxBody}
-                    onChange={(e) => setInboxBody(e.target.value)}
-                    rows={5}
-                    placeholder="Typ je bericht..."
-                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-rose-500 resize-y"
-                  />
-                </div>
-
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      void handleSendPrivateMessage();
-                    }}
-                    disabled={inboxSending}
-                    className="px-3 py-2 text-slate-300 bg-slate-800 rounded-lg border disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {inboxSending ? 'Verzenden...' : 'Verstuur bericht'}
-                  </button>
-                </div>
-              </div>
-            )}
-
-            <div className="rounded-xl border border-slate-800 bg-slate-950 p-4 space-y-3">
-              <div className="flex items-center justify-between gap-2">
-                <p className="text-sm font-semibold text-slate-200">Berichten</p>
-                <div className="flex items-center gap-1">
-                  <button
-                    type="button"
-                    onClick={() => setInboxFilter('received')}
-                    className={`px-2 py-1 text-slate-300 rounded border bg-slate-800 ${inboxFilter === 'received' ? 'border-rose-600 text-slate-300 bg-slate-800' : 'border-slate-700'}`}
-                  >
-                    Ontvangen
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setInboxFilter('sent')}
-                    className={`px-2 py-1 text-slate-300 rounded border bg-slate-800 ${inboxFilter === 'sent' ? 'border-rose-600 text-slate-300 bg-slate-800' : 'border-slate-700'}`}
-                  >
-                    Verzonden
-                  </button>
-                </div>
-              </div>
-
-              {(inboxBlockedUserIds.length > 0 || blockedMessageCount > 0) && (
-                <div className="rounded-lg border border-slate-800 bg-slate-900/40 p-2.5 space-y-2">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="text-[11px] text-slate-500">
-                      Geblokkeerde gebruikers: {inboxBlockedUserIds.length} • Verborgen berichten: {blockedMessageCount}
-                    </p>
-                    <button
-                      type="button"
-                      onClick={handleClearInboxBlocks}
-                      disabled={inboxBlockedUserIds.length === 0}
-                      className="px-2 py-1 text-[11px] rounded border border-slate-700 text-slate-200 hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      Deblokkeer alles
-                    </button>
-                  </div>
-                  {blockedUsersSummary.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5">
-                      {blockedUsersSummary.map((entry) => (
-                        <button
-                          key={entry.id}
-                          type="button"
-                          onClick={() => handleUnblockInboxUser(entry.id, entry.username)}
-                          className="px-2 py-1 text-[11px] rounded border border-slate-700 text-slate-200 hover:bg-slate-800"
-                          title={`Deblokkeer ${entry.username}`}
-                        >
-                          Deblokkeer {entry.username}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {isStaffInboxView && (
-                <div className="rounded-lg border border-slate-800 bg-slate-900/40 p-2.5 space-y-2">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="text-[11px] text-slate-500">
-                      Gemelde berichten: {reportedEntriesForStaff.length}
-                    </p>
-                  </div>
-
-                  {reportedEntriesForStaff.length === 0 ? (
-                    <p className="text-xs text-slate-500">Nog geen meldingen voor staff.</p>
-                  ) : (
-                    <div className="space-y-1.5">
-                      {reportedEntriesForStaff.slice(0, 25).map((entry, index) => {
-                        const reportedAtLabel = entry?.reportedAt
-                          ? new Date(entry.reportedAt).toLocaleString([], { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
-                          : 'Onbekend';
-                        const fallbackKey = `${entry?.id || 'unknown'}-${entry?.reportedAt || index}`;
-
-                        return (
-                          <div key={fallbackKey} className="rounded border border-slate-800 bg-slate-950 p-2">
-                            <div className="flex items-start justify-between gap-2">
-                              <div>
-                                <p className="text-[11px] text-slate-300">
-                                  #{String(entry?.id || '').trim() || 'Onbekend'} • {formatDisplayUsername(entry?.senderUsername || 'Onbekend')} • {reportedAtLabel}
-                                </p>
-                                <p className="text-[11px] text-slate-500 mt-0.5">
-                                  Onderwerp: {entry?.subject || '(geen onderwerp)'}
-                                </p>
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() => handleRemoveReportedInboxEntry(entry?.id, entry?.reportedAt)}
-                                className="px-2 py-1 text-[11px] rounded border border-red-800/70 text-red-200 hover:bg-red-950/30"
-                              >
-                                Verwijder melding
-                              </button>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {inboxLoading ? (
-                <p className="text-xs text-slate-400">Inbox laden...</p>
-              ) : inboxError ? (
-                <div className="rounded-lg border border-red-800/40 bg-red-950/20 text-red-200 px-3 py-2 text-xs">
-                  {inboxError}
-                </div>
-              ) : filteredMessages.length === 0 ? (
-                <p className="text-xs text-slate-500">Nog geen berichten in deze map.</p>
-              ) : (
-                <div className="space-y-2.5">
-                  {filteredMessages.map((message) => {
-                    const isReceived = String(message?.recipient_id || '') === ownId;
-                    const actor = isReceived ? message?.sender_username : message?.recipient_username;
-                    const actorId = String(isReceived ? message?.sender_id : message?.recipient_id || '');
-                    const messageId = String(message?.id || '');
-                    const actorLabel = formatDisplayUsername(actor || 'Onbekend');
-                    const createdLabel = message?.created_at
-                      ? new Date(message.created_at).toLocaleString([], { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
-                      : 'Onbekend';
-                    const isActionLoading = inboxMessageActionId === messageId;
-                    const canBlockActor = Boolean(actorId) && actorId !== ownId && !blockedUserIdSet.has(actorId);
-                    const isReported = messageId && reportedMessageIdSet.has(messageId);
-                    const canReportMessage = isReceived && actorId !== ownId && !isReported;
-
-                    return (
-                      <div key={message.id} className="rounded-xl border border-slate-800 bg-slate-900/40 p-3.5">
-                        <div className="flex items-center justify-between gap-2">
-                          <p className="text-xs font-semibold text-slate-200">{message.subject || '(geen onderwerp)'}</p>
-                          <div className="flex items-center gap-1.5">
-                            {isReported && (
-                              <span className="px-1.5 py-0.5 text-[10px] rounded border border-slate-700 text-slate-300 bg-slate-800">
-                                Gemeld
-                              </span>
-                            )}
-                            <span className="text-[11px] text-slate-500">{createdLabel}</span>
-                          </div>
-                        </div>
-                        <p className="text-[11px] text-slate-400 mt-0.5">
-                          {isReceived ? 'Van' : 'Naar'}: {actorLabel}
-                        </p>
-                        <p className="text-xs text-slate-300 mt-2 whitespace-pre-wrap break-words">{message.content || ''}</p>
-
-                        <div className="mt-3 flex flex-wrap gap-1.5">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              void handleDeletePrivateMessage(messageId);
-                            }}
-                            disabled={isActionLoading}
-                            className="px-2 py-1 text-[11px] rounded border border-red-800/70 text-red-200 hover:bg-red-950/30 disabled:opacity-50 disabled:cursor-not-allowed"
-                          >
-                            {isActionLoading && inboxMessageActionType === 'delete' ? 'Verwijderen...' : 'Verwijder'}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              void handleReportPrivateMessage(message);
-                            }}
-                            disabled={isActionLoading || !canReportMessage}
-                            className="px-2 py-1 text-[11px] rounded border border-amber-700/70 text-amber-200 hover:bg-amber-950/30 disabled:opacity-50 disabled:cursor-not-allowed"
-                          >
-                            {isActionLoading && inboxMessageActionType === 'report'
-                              ? 'Melden...'
-                              : isReported
-                                ? 'Gemeld'
-                                : isReceived
-                                  ? 'Meld'
-                                  : 'Niet mogelijk'}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleBlockInboxUser(actorId, actorLabel)}
-                            disabled={!canBlockActor}
-                            className="px-2 py-1 text-[11px] rounded border border-slate-700 text-slate-200 hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed"
-                          >
-                            {canBlockActor ? 'Blokkeer gebruiker' : 'Geblokkeerd'}
-                          </button>
                         </div>
                       </div>
                     );
@@ -5179,7 +5357,7 @@ if (currentView === 'helpdesk') {
 
         <main className="flex-grow p-6">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl max-w-3xl mx-auto">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-4"> ❓ Helpdesk</h3>
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-4">Helpdesk</h3>
 
             {actionNotice && (
               <div className={`mb-4 rounded-xl border p-3 text-xs ${actionNotice.type === 'error' ? 'bg-red-950/30 border-red-800/40 text-red-200' : 'bg-emerald-950/30 border-emerald-800/40 text-emerald-200'}`}>
@@ -5293,7 +5471,7 @@ if (currentView === 'settings') {
 
         <main className="flex-grow p-6">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl max-w-3xl mx-auto">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-4"> ⚙️ Instellingen</h3>
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-4">Instellingen</h3>
             <div className="bg-slate-950 border border-slate-850 rounded-xl p-4 space-y-2.5 text-sm">
               <div className="flex flex-col sm:flex-row gap-4 sm:items-center sm:justify-between pb-4 mb-3">
                 <div className="pb-4 mb-3">
@@ -5365,7 +5543,7 @@ if (currentView === 'information') {
 
         <main className="flex-grow p-6">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl max-w-3xl mx-auto">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-4"> ⓘ Informatie</h3>
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-4">Informatie</h3>
             <div className="bg-slate-950 border border-slate-850 rounded-xl p-4 space-y-2.5 text-sm">
               <div className="flex flex-col sm:flex-row gap-4 sm:items-center sm:justify-between pb-4 mb-3">
                 <div className="pb-4 mb-3">
@@ -5444,7 +5622,7 @@ if (currentView === 'information') {
               <div>
                 <h2 className="text-xl font-bold tracking-tight" style={roleNameColorStyle(userRole)}>{stats?.username ? formatDisplayUsername(stats.username) : "Petty Criminal"}</h2>
                 <span className="text-xs bg-slate-800 text-slate-300 px-2.5 py-1 rounded font-mono block mt-1 w-fit">
-                  Level {stats?.level || 1} • Kruimeldief
+                  Level {stats?.level || 1} | Kruimeldief
                 </span>
                 <span className="text-xs text-slate-400 block mt-1">
                   Gender: {formatGenderLabel(stats?.gender)}
@@ -5497,7 +5675,7 @@ if (currentView === 'information') {
                 <div>
                   <span className="text-[10px] uppercase tracking-wider text-slate-500 block">Fysieke Kracht</span>
                   <span className="text-base font-extrabold text-white flex items-center gap-1.5 mt-0.5">
-                    💪 {stats?.strength || 10}
+                     {stats?.strength || 10}
                   </span>
                 </div>
                 <div>
@@ -5527,7 +5705,7 @@ if (currentView === 'information') {
         <section className="lg:col-span-7 flex flex-col gap-6">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl flex-grow flex flex-col">
             <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-4">
-              📋 Activiteitenlogboek
+              Activiteitenlogboek
             </h3>
 
             <div className="flex-grow bg-slate-950 rounded-xl p-4 font-mono text-xs border border-slate-850 overflow-y-auto max-h-[400px] lg:max-h-none space-y-2.5">
@@ -5559,3 +5737,7 @@ if (currentView === 'information') {
     </div>
   );
 }
+
+
+
+
