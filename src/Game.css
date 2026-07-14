@@ -873,6 +873,7 @@ button[class*='bg-slate-850']:active {
 
 @media (max-width: 1023px) {
 	.p-6 { padding: 1rem; }
+	.px-6 { padding-left: 1rem; padding-right: 1rem; }
 	.text-2xl { font-size: 1.35rem; }
 	h1 { font-size: 1.15rem; }
 
@@ -915,6 +916,27 @@ button[class*='bg-slate-850']:active {
 		padding-bottom: 86px;
 	}
 
+	.top-tabs-nav {
+		display: flex;
+		overflow-x: auto;
+		gap: 0.5rem;
+		scrollbar-width: none;
+	}
+
+	.top-tabs-nav::-webkit-scrollbar {
+		display: none;
+	}
+
+	.top-tabs-nav > * {
+		flex: 0 0 auto;
+		min-width: 120px;
+	}
+
+	.top-tab-btn {
+		font-size: 14px;
+		padding: 0.5rem 0.7rem;
+	}
+
 	.pm-page-title {
 		font-size: 24px;
 	}
@@ -948,5 +970,18 @@ button[class*='bg-slate-850']:active {
 
 	.pm-send-btn {
 		width: 100%;
+	}
+}
+
+@media (max-width: 639px) {
+	.max-w-2xl,
+	.max-w-3xl,
+	.max-w-4xl {
+		max-width: 100%;
+	}
+
+	.header-mobile-tight {
+		padding-left: 0.9rem;
+		padding-right: 0.9rem;
 	}
 }

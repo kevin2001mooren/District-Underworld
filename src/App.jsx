@@ -116,6 +116,7 @@ export default function App() {
   const [privateChatInput, setPrivateChatInput] = useState('');
   const [privateChatSending, setPrivateChatSending] = useState(false);
   const [privateUnreadByConversation, setPrivateUnreadByConversation] = useState({});
+  const [privateLastReadByConversation, setPrivateLastReadByConversation] = useState({});
   const [privateBlockedUserIds, setPrivateBlockedUserIds] = useState([]);
   const [privateHiddenConversationKeys, setPrivateHiddenConversationKeys] = useState([]);
   const [privateTypingByConversation, setPrivateTypingByConversation] = useState({});
@@ -252,6 +253,15 @@ export default function App() {
 
   const isMissingPlayerStatsColumnError = (error, columnName) => {
     return isMissingColumnError(error, 'player_stats', columnName);
+  };
+
+  const isMissingTableError = (error, tableName) => {
+    const message = String(error?.message || '').toLowerCase();
+    const target = String(tableName || '').toLowerCase();
+    return (
+      message.includes('does not exist') &&
+      (message.includes(`relation \"${target}\"`) || message.includes(target))
+    );
   };
 
   const refreshAdminMembers = async () => {
@@ -680,6 +690,7 @@ export default function App() {
       setOpenPrivateConversationKeys([]);
       setActivePrivateConversationKey('');
       setPrivateUnreadByConversation({});
+      setPrivateLastReadByConversation({});
       setPrivateBlockedUserIds([]);
       setPrivateHiddenConversationKeys([]);
       setPrivateTypingByConversation({});
@@ -698,13 +709,30 @@ export default function App() {
     try {
       const blockedRaw = localStorage.getItem(getPrivateBlockedStorageKey(user.id));
       const hiddenRaw = localStorage.getItem(getPrivateHiddenStorageKey(user.id));
+      const tabsRaw = localStorage.getItem(getPrivateOpenTabsStorageKey(user.id));
+      const activeRaw = localStorage.getItem(getPrivateActiveTabStorageKey(user.id));
+      const windowRaw = localStorage.getItem(getPrivateWindowOpenStorageKey(user.id));
       const blockedParsed = blockedRaw ? JSON.parse(blockedRaw) : [];
       const hiddenParsed = hiddenRaw ? JSON.parse(hiddenRaw) : [];
+      const tabsParsed = tabsRaw ? JSON.parse(tabsRaw) : [];
+      const normalizedTabs = normalizeIdList(Array.isArray(tabsParsed) ? tabsParsed : []).slice(-6);
+      const normalizedActive = getPrivateConversationKey(activeRaw);
+      const restoredActive = normalizedActive || normalizedTabs[normalizedTabs.length - 1] || '';
+      const restoredTabs = restoredActive
+        ? Array.from(new Set([...normalizedTabs.filter((entry) => entry !== restoredActive), restoredActive])).slice(-6)
+        : normalizedTabs;
+
       setPrivateBlockedUserIds(normalizeIdList(Array.isArray(blockedParsed) ? blockedParsed : []));
       setPrivateHiddenConversationKeys(normalizeIdList(Array.isArray(hiddenParsed) ? hiddenParsed : []));
+      setOpenPrivateConversationKeys(restoredTabs);
+      setActivePrivateConversationKey(restoredActive);
+      setIsPrivateChatWindowOpen(windowRaw === '1' && Boolean(restoredActive));
     } catch (_error) {
       setPrivateBlockedUserIds([]);
       setPrivateHiddenConversationKeys([]);
+      setOpenPrivateConversationKeys([]);
+      setActivePrivateConversationKey('');
+      setIsPrivateChatWindowOpen(false);
     }
   }, [user?.id]);
 
@@ -738,10 +766,38 @@ export default function App() {
 
   useEffect(() => {
     if (!user?.id) return;
+    try {
+      const tabs = normalizeIdList(openPrivateConversationKeys).slice(-6);
+      if (tabs.length === 0) {
+        localStorage.removeItem(getPrivateOpenTabsStorageKey(user.id));
+      } else {
+        localStorage.setItem(getPrivateOpenTabsStorageKey(user.id), JSON.stringify(tabs));
+      }
+
+      const active = getPrivateConversationKey(activePrivateConversationKey);
+      if (!active) {
+        localStorage.removeItem(getPrivateActiveTabStorageKey(user.id));
+      } else {
+        localStorage.setItem(getPrivateActiveTabStorageKey(user.id), active);
+      }
+
+      const shouldShowPrivateWindow = isPrivateChatWindowOpen && Boolean(active);
+      if (!shouldShowPrivateWindow) {
+        localStorage.removeItem(getPrivateWindowOpenStorageKey(user.id));
+      } else {
+        localStorage.setItem(getPrivateWindowOpenStorageKey(user.id), '1');
+      }
+    } catch (_error) {
+      // Ignore local storage failures.
+    }
+  }, [user?.id, openPrivateConversationKeys, activePrivateConversationKey, isPrivateChatWindowOpen]);
+
+  useEffect(() => {
+    if (!user?.id) return;
 
     const ownId = String(user.id);
     const channel = supabase
-      .channel(`private-typing-${ownId}`)
+      .channel('private-direct-live')
       .on('broadcast', { event: 'private-message' }, ({ payload }) => {
         const senderId = String(payload?.senderId || '').trim();
         const recipientId = String(payload?.recipientId || '').trim();
@@ -828,7 +884,7 @@ export default function App() {
       privateTypingTimeoutsRef.current = {};
       setPrivateTypingByConversation({});
     };
-  }, [user?.id, privateBlockedUserIds]);
+  }, [user?.id, privateBlockedUserIds, privateHiddenConversationKeys, isPrivateChatWindowOpen, activePrivateConversationKey]);
 
   useEffect(() => {
     if (!user?.id) return;
@@ -892,11 +948,43 @@ export default function App() {
   useEffect(() => {
     if (!activePrivateConversationKey) return;
     if (!isPrivateChatWindowOpen) return;
-    setPrivateUnreadByConversation((prev) => {
-      if (!prev[activePrivateConversationKey]) return prev;
-      return { ...prev, [activePrivateConversationKey]: 0 };
+    void persistPrivateConversationRead(activePrivateConversationKey);
+  }, [activePrivateConversationKey, isPrivateChatWindowOpen, user?.id]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    if (!activePrivateConversationKey || !isPrivateChatWindowOpen) return;
+
+    const ownId = String(user.id || '').trim();
+    const key = getPrivateConversationKey(activePrivateConversationKey);
+    if (!key) return;
+
+    const latestIncomingMessage = (privateMessages || []).slice().reverse().find((message) => {
+      const senderId = String(message?.sender_id || '').trim();
+      const recipientId = String(message?.recipient_id || '').trim();
+      return recipientId === ownId && senderId === key;
     });
-  }, [activePrivateConversationKey, isPrivateChatWindowOpen]);
+
+    if (!latestIncomingMessage?.created_at) return;
+
+    const latestIncomingMs = new Date(latestIncomingMessage.created_at).getTime();
+    const lastReadValue = String(privateLastReadByConversation[key] || '').trim();
+    const lastReadMs = lastReadValue ? new Date(lastReadValue).getTime() : 0;
+    const alreadyMarkedRead =
+      Number.isFinite(latestIncomingMs) &&
+      Number.isFinite(lastReadMs) &&
+      latestIncomingMs <= lastReadMs;
+
+    if (alreadyMarkedRead) return;
+
+    void persistPrivateConversationRead(key, latestIncomingMessage.created_at);
+  }, [
+    user?.id,
+    activePrivateConversationKey,
+    isPrivateChatWindowOpen,
+    privateMessages,
+    privateLastReadByConversation
+  ]);
 
   useEffect(() => {
     if (!user?.id) {
@@ -1067,7 +1155,7 @@ export default function App() {
     setPrivateChatLoading(true);
     setPrivateChatError('');
     try {
-      const [messagesResult, contactsResult] = await Promise.all([
+      const [messagesResult, contactsResult, readsResult] = await Promise.all([
         supabase
           .from('private_messages')
           .select('id, sender_id, sender_username, recipient_id, recipient_username, content, created_at')
@@ -1079,14 +1167,65 @@ export default function App() {
           .select('id, username, role')
           .neq('id', user.id)
           .order('username', { ascending: true })
-          .limit(600)
+          .limit(600),
+        supabase
+          .from('private_message_reads')
+          .select('conversation_key, last_read_at')
+          .eq('user_id', user.id)
       ]);
 
       if (messagesResult.error) throw messagesResult.error;
       if (contactsResult.error) throw contactsResult.error;
+      if (readsResult.error && !isMissingTableError(readsResult.error, 'private_message_reads')) {
+        throw readsResult.error;
+      }
 
       const messages = (messagesResult.data || []).slice().reverse();
+      const cachedReadsMap = readPrivateReadsCache(user.id);
+      const readsMap = { ...cachedReadsMap };
+      (readsResult.error ? [] : (readsResult.data || [])).forEach((entry) => {
+        const key = getPrivateConversationKey(entry?.conversation_key);
+        const lastReadAt = String(entry?.last_read_at || '').trim();
+        if (!key || !lastReadAt) return;
+        const cachedValue = String(readsMap[key] || '').trim();
+        const cachedMs = cachedValue ? new Date(cachedValue).getTime() : 0;
+        const dbMs = new Date(lastReadAt).getTime();
+        if (!Number.isFinite(dbMs)) return;
+        if (!Number.isFinite(cachedMs) || dbMs >= cachedMs) {
+          readsMap[key] = lastReadAt;
+        }
+      });
+
+      const ownId = String(user.id || '').trim();
+      const unreadMap = {};
+      messages.forEach((message) => {
+        const senderId = String(message?.sender_id || '').trim();
+        const recipientId = String(message?.recipient_id || '').trim();
+        const isIncoming = recipientId === ownId && senderId !== ownId;
+        if (!isIncoming) return;
+
+        const conversationKey = getPrivateConversationKey(senderId);
+        if (!conversationKey) return;
+        if (isPrivateActorBlocked(senderId)) return;
+        if (isPrivateConversationHidden(conversationKey)) return;
+
+        const createdAtMs = new Date(message?.created_at || 0).getTime();
+        const lastReadAt = String(readsMap[conversationKey] || '').trim();
+        const lastReadMs = lastReadAt ? new Date(lastReadAt).getTime() : 0;
+        const isRead =
+          Number.isFinite(createdAtMs) &&
+          Number.isFinite(lastReadMs) &&
+          createdAtMs <= lastReadMs;
+
+        if (!isRead) {
+          unreadMap[conversationKey] = (Number(unreadMap[conversationKey]) || 0) + 1;
+        }
+      });
+
       setPrivateMessages(messages);
+      setPrivateLastReadByConversation(readsMap);
+      setPrivateUnreadByConversation(unreadMap);
+      writePrivateReadsCache(user.id, readsMap);
       privateMessageIdsRef.current = new Set(messages.map((entry) => String(entry?.id || '').trim()).filter(Boolean));
       setPrivateContacts((contactsResult.data || []).map((entry) => ({
         ...entry,
@@ -1097,6 +1236,53 @@ export default function App() {
       setPrivateChatError(`Privechat laden mislukt: ${text}`);
     } finally {
       setPrivateChatLoading(false);
+    }
+  };
+
+  const persistPrivateConversationRead = async (conversationKey, readAtValue = null) => {
+    const key = getPrivateConversationKey(conversationKey);
+    const ownId = String(user?.id || '').trim();
+    if (!ownId || !key) return;
+
+    const nextReadAt = String(readAtValue || new Date().toISOString()).trim() || new Date().toISOString();
+    const nextReadMs = new Date(nextReadAt).getTime();
+    const previousValue = String(privateLastReadByConversation[key] || '').trim();
+    const previousMs = previousValue ? new Date(previousValue).getTime() : 0;
+    const hasNewerReadAt =
+      Number.isFinite(previousMs) &&
+      Number.isFinite(nextReadMs) &&
+      previousMs >= nextReadMs;
+
+    if (hasNewerReadAt) {
+      setPrivateUnreadByConversation((prev) => {
+        if (!prev[key]) return prev;
+        return { ...prev, [key]: 0 };
+      });
+      return;
+    }
+
+    const nextReadMap = { ...privateLastReadByConversation, [key]: nextReadAt };
+    setPrivateLastReadByConversation(nextReadMap);
+    writePrivateReadsCache(ownId, nextReadMap);
+
+    setPrivateUnreadByConversation((prev) => {
+      if (!prev[key]) return prev;
+      return { ...prev, [key]: 0 };
+    });
+
+    try {
+      const { error } = await supabase
+        .from('private_message_reads')
+        .upsert(
+          [{ user_id: ownId, conversation_key: key, last_read_at: nextReadAt }],
+          { onConflict: 'user_id,conversation_key' }
+        );
+
+      if (error && !isMissingTableError(error, 'private_message_reads')) {
+        throw error;
+      }
+    } catch (_error) {
+      // Read markers are best-effort; unread falls back to live counters.
     }
   };
 
@@ -1551,7 +1737,7 @@ export default function App() {
       return [...next, actorId].slice(-6);
     });
     setActivePrivateConversationKey(actorId);
-    setPrivateUnreadByConversation((prev) => ({ ...prev, [actorId]: 0 }));
+    void persistPrivateConversationRead(actorId);
     setIsPrivateChatWindowOpen(true);
     setIsGlobalChatWindowOpen(false);
     setIsChatWidgetOpen(true);
@@ -1677,6 +1863,42 @@ export default function App() {
   const getChatSettingsStorageKey = (playerId) => `district-underworld-chat-widget-settings-${playerId}`;
   const getPrivateBlockedStorageKey = (playerId) => `district-underworld-private-blocked-${playerId}`;
   const getPrivateHiddenStorageKey = (playerId) => `district-underworld-private-hidden-${playerId}`;
+  const getPrivateReadsStorageKey = (playerId) => `district-underworld-private-reads-${playerId}`;
+  const getPrivateOpenTabsStorageKey = (playerId) => `district-underworld-private-open-tabs-${playerId}`;
+  const getPrivateActiveTabStorageKey = (playerId) => `district-underworld-private-active-tab-${playerId}`;
+  const getPrivateWindowOpenStorageKey = (playerId) => `district-underworld-private-window-open-${playerId}`;
+
+  const readPrivateReadsCache = (playerId) => {
+    if (!playerId) return {};
+    try {
+      const raw = localStorage.getItem(getPrivateReadsStorageKey(playerId));
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+
+      const next = {};
+      Object.entries(parsed).forEach(([key, value]) => {
+        const normalizedKey = getPrivateConversationKey(key);
+        const normalizedValue = String(value || '').trim();
+        if (!normalizedKey || !normalizedValue) return;
+        if (!Number.isFinite(new Date(normalizedValue).getTime())) return;
+        next[normalizedKey] = normalizedValue;
+      });
+      return next;
+    } catch (_error) {
+      return {};
+    }
+  };
+
+  const writePrivateReadsCache = (playerId, readsMap) => {
+    if (!playerId) return;
+    try {
+      const source = readsMap && typeof readsMap === 'object' ? readsMap : {};
+      localStorage.setItem(getPrivateReadsStorageKey(playerId), JSON.stringify(source));
+    } catch (_error) {
+      // Ignore local storage write failures.
+    }
+  };
 
   const normalizeIdList = (values) => {
     const source = Array.isArray(values) ? values : [];
@@ -3148,7 +3370,10 @@ export default function App() {
 
     const chatWindowWidthPx = Math.round(380 * (chatWindowWidthPercent / 100));
     const chatWindowHeightPx = Math.round(335 * (chatWindowHeightPercent / 100));
-    const baseDockBottomPx = 50;
+    const isMobileViewport = window.innerWidth <= 1023;
+    const chatDockBottomPx = isMobileViewport ? 86 : 8;
+    const chatPanelBottomPx = chatDockBottomPx + 40;
+    const baseDockBottomPx = chatPanelBottomPx + 2;
     const activeChannel = ['live', 'trade', 'faction'].includes(chatWidgetTab) ? chatWidgetTab : 'live';
     const channelLabel = activeChannel === 'trade' ? 'Trade' : activeChannel === 'faction' ? 'Faction' : 'Global';
     const isGlobalWindowVisible = isChatWidgetOpen && isGlobalChatWindowOpen;
@@ -3224,7 +3449,7 @@ export default function App() {
       setIsPrivateChatWindowOpen(true);
       setIsGlobalChatWindowOpen(false);
       setIsChatConversationsMenuOpen(false);
-      setPrivateUnreadByConversation((prev) => ({ ...prev, [key]: 0 }));
+      void persistPrivateConversationRead(key);
     };
 
     const toggleIgnoreConversationActor = (actorId) => {
@@ -3307,7 +3532,7 @@ export default function App() {
             style={{
               position: 'fixed',
               right: '10px',
-              bottom: '48px',
+              bottom: `${chatPanelBottomPx}px`,
               zIndex: 9999,
               display: 'flex',
               alignItems: 'flex-end',
@@ -3467,7 +3692,7 @@ export default function App() {
             style={{
               position: 'fixed',
               right: '10px',
-              bottom: '48px',
+              bottom: `${chatPanelBottomPx}px`,
               zIndex: 10001,
               display: 'flex',
               alignItems: 'flex-end',
@@ -3580,7 +3805,7 @@ export default function App() {
             style={{
               position: 'fixed',
               right: '10px',
-              bottom: '50px',
+              bottom: `${baseDockBottomPx}px`,
               zIndex: 10003,
               width: 'min(360px, calc(100vw - 20px))',
               maxHeight: 'min(560px, calc(100vh - 80px))',
@@ -3788,7 +4013,7 @@ export default function App() {
           style={{
             position: 'fixed',
             right: '10px',
-            bottom: '8px',
+            bottom: `${chatDockBottomPx}px`,
             zIndex: 10000,
             display: 'flex',
             gap: '4px',
@@ -3879,7 +4104,7 @@ export default function App() {
                     setIsPrivateChatWindowOpen(true);
                     setIsGlobalChatWindowOpen(false);
                     setIsChatConversationsMenuOpen(false);
-                    setPrivateUnreadByConversation((prev) => ({ ...prev, [conversationKey]: 0 }));
+                    void persistPrivateConversationRead(conversationKey);
                   }}
                   className={`px-2 py-1.5 text-xs rounded border whitespace-nowrap ${isActive ? 'border-emerald-600 bg-emerald-900/40 text-emerald-200' : 'border-slate-700 bg-slate-900 text-slate-200 hover:bg-slate-800'}`}
                   title={conversation.actorName}
@@ -3927,7 +4152,7 @@ export default function App() {
               : null;
 
     return (
-    <div className="bg-slate-900 border-b border-slate-800 px-6 py-2 grid grid-cols-7 gap-2 w-full relative" style={{ zIndex: 200 }}>
+    <div className="top-tabs-nav bg-slate-900 border-b border-slate-800 px-6 py-2 grid grid-cols-7 gap-2 w-full relative" style={{ zIndex: 200 }}>
       {NAV_TABS.map((tab) => {
         if (tab !== 'stad') {
           return (
@@ -3946,7 +4171,7 @@ export default function App() {
                 setActiveTab(tab);
                 setCurrentView(tab === 'misdaad' ? 'crime' : tab === 'sporten' ? 'sports' : 'game');
               }}
-              className={`w-full px-3 py-1 rounded-lg text-base font-bold border transition ${
+              className={`top-tab-btn w-full px-3 py-1 rounded-lg text-base font-bold border transition ${
                 highlightedTab === tab
                   ? 'bg-rose-600 text-white border-rose-500/20'
                   : 'bg-slate-950 text-slate-300 border-slate-800 hover:bg-slate-800 hover:text-white'
@@ -3961,7 +4186,7 @@ export default function App() {
           <div key={tab} className="relative">
             <button
               onClick={() => setCityMenuOpen(prev => !prev)}
-              className={`w-full px-3 py-1 rounded-lg text-base font-bold border transition ${
+              className={`top-tab-btn w-full px-3 py-1 rounded-lg text-base font-bold border transition ${
                 highlightedTab === tab
                   ? 'bg-rose-600 text-white border-rose-500/20'
                   : 'bg-slate-950 text-slate-300 border-slate-800 hover:bg-slate-800 hover:text-white'
@@ -4116,7 +4341,7 @@ export default function App() {
     const usernameInitial = usernameLabel.charAt(0).toUpperCase() || '?';
 
     return (
-      <div style={{ minWidth: '280px', maxWidth: '430px' }}>
+      <div style={{ width: '100%', minWidth: 0, maxWidth: '430px' }}>
         <div
           className="rounded-xl border p-3"
           style={{
