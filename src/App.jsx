@@ -133,6 +133,7 @@ export default function App() {
   const [helpdeskLastSentKey, setHelpdeskLastSentKey] = useState('');
   const dashboardScrollRef = useRef(null);
   const chatScrollRef = useRef(null);
+  const privateChatScrollRef = useRef(null);
   const shouldAutoScrollChatRef = useRef(true);
   const didInitialChatScrollRef = useRef(false);
   const chatUserRolesRef = useRef({});
@@ -181,6 +182,22 @@ export default function App() {
     requestAnimationFrame(() => {
       scrollDashboardToTop(remainingPasses - 1);
     });
+  };
+
+  const scrollPrivateChatToBottom = (remainingPasses = 4) => {
+    const container = privateChatScrollRef.current;
+    if (!container) return false;
+    container.scrollTo({ top: container.scrollHeight, behavior: 'auto' });
+
+    const atBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 1;
+    if (atBottom) return true;
+
+    if (remainingPasses <= 0) return false;
+    requestAnimationFrame(() => {
+      scrollPrivateChatToBottom(remainingPasses - 1);
+    });
+
+    return false;
   };
 
   const normalizeRole = (value) => {
@@ -563,6 +580,24 @@ export default function App() {
     if (!value) return '';
     const date = new Date(value);
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  };
+
+  const formatChatTimestamp = (value) => {
+    if (!value) return '';
+    const date = new Date(value);
+    if (!Number.isFinite(date.getTime())) return '';
+
+    const now = new Date();
+    const isToday =
+      date.getFullYear() === now.getFullYear() &&
+      date.getMonth() === now.getMonth() &&
+      date.getDate() === now.getDate();
+
+    const timeLabel = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    if (isToday) return timeLabel;
+
+    const dayLabel = date.toLocaleDateString([], { weekday: 'short', day: '2-digit', month: '2-digit' });
+    return `${dayLabel} ${timeLabel}`;
   };
 
   const getChatDayKey = (value) => {
@@ -987,7 +1022,17 @@ export default function App() {
   ]);
 
   useEffect(() => {
+    if (!isPrivateChatWindowOpen) return;
+    if (!activePrivateConversationKey) return;
+
+    requestAnimationFrame(() => {
+      scrollPrivateChatToBottom();
+    });
+  }, [isPrivateChatWindowOpen, activePrivateConversationKey, privateMessages.length]);
+
+  useEffect(() => {
     if (!user?.id) {
+      setIsGlobalChatWindowOpen(true);
       setChatWindowWidthPercent(100);
       setChatWindowHeightPercent(100);
       setChatUseBubbles(true);
@@ -1016,6 +1061,9 @@ export default function App() {
       if (typeof parsed?.showAvatars === 'boolean') {
         setChatShowAvatars(parsed.showAvatars);
       }
+      if (typeof parsed?.globalWindowOpen === 'boolean') {
+        setIsGlobalChatWindowOpen(parsed.globalWindowOpen);
+      }
     } catch (_error) {
       // Ignore corrupted local preferences and continue with defaults.
     }
@@ -1029,12 +1077,13 @@ export default function App() {
         widthPercent: chatWindowWidthPercent,
         heightPercent: chatWindowHeightPercent,
         useBubbles: chatUseBubbles,
-        showAvatars: chatShowAvatars
+        showAvatars: chatShowAvatars,
+        globalWindowOpen: isGlobalChatWindowOpen
       }));
     } catch (_error) {
       // Ignore storage write failures.
     }
-  }, [user?.id, chatWindowWidthPercent, chatWindowHeightPercent, chatUseBubbles, chatShowAvatars]);
+  }, [user?.id, chatWindowWidthPercent, chatWindowHeightPercent, chatUseBubbles, chatShowAvatars, isGlobalChatWindowOpen]);
 
   useEffect(() => {
     if (!isChatSettingsMenuOpen) return;
@@ -3614,7 +3663,7 @@ export default function App() {
                     return (
                       <div key={message.id} style={{ marginBottom: '8px', borderRadius: '6px', border: '1px solid #e5e7eb', background: '#ffffff', padding: '6px 8px' }}>
                         <div style={{ fontSize: '12px', lineHeight: 1.35, color: '#111827' }}>
-                          <span style={{ color: '#6b7280', marginRight: '6px' }}>[{formatChatTime(message.created_at)}]</span>
+                          <span style={{ color: '#6b7280', marginRight: '6px' }}>[{formatChatTimestamp(message.created_at)}]</span>
                           {canOpenProfile ? (
                             <span
                               role="button"
@@ -3734,7 +3783,10 @@ export default function App() {
                 </button>
               </div>
 
-              <div style={{ maxHeight: `${chatWindowHeightPx}px`, minHeight: `${chatWindowHeightPx}px`, overflowY: 'auto', padding: '10px 10px 8px' }}>
+              <div
+                ref={privateChatScrollRef}
+                style={{ maxHeight: `${chatWindowHeightPx}px`, minHeight: `${chatWindowHeightPx}px`, overflowY: 'auto', padding: '10px 10px 8px' }}
+              >
                 {selectedPrivateMessages.length === 0 ? (
                   <p style={{ fontSize: '12px', color: '#666' }}>Nog geen priveberichten in dit gesprek.</p>
                 ) : (
@@ -3752,7 +3804,7 @@ export default function App() {
                         }}
                       >
                         <div style={{ fontSize: '11px', color: '#6b7280', marginBottom: '2px' }}>
-                          {fromSelf ? 'Jij' : selectedPrivateConversation.actorName} [{formatChatTime(message.created_at)}]
+                          {fromSelf ? 'Jij' : selectedPrivateConversation.actorName} [{formatChatTimestamp(message.created_at)}]
                         </div>
                         <div style={{ fontSize: '12px', color: '#111827', lineHeight: 1.35 }}>{message.content}</div>
                       </div>
