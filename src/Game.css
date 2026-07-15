@@ -880,16 +880,18 @@ button[class*='bg-slate-850']:active {
 	.left-utility-menu {
 		display: grid;
 		grid-template-columns: repeat(4, minmax(0, 1fr));
-		position: fixed;
-		left: 10px;
-		right: 10px;
-		bottom: 136px;
+		position: fixed !important;
+		left: 0;
+		right: 0;
+		bottom: 0 !important;
 		top: auto;
-		width: auto;
+		width: 100%;
 		z-index: 10005;
-		border-radius: 0.9rem;
+		border-radius: 0.9rem 0.9rem 0 0;
 		border: 1px solid #3b3b3b;
 		background: linear-gradient(180deg, #181818 0%, #111111 100%);
+		padding-bottom: env(safe-area-inset-bottom, 0px);
+		transform: translateZ(0);
 		overflow: hidden;
 	}
 
@@ -913,7 +915,7 @@ button[class*='bg-slate-850']:active {
 	}
 
 	.app-with-left-utility > main {
-		padding-bottom: 210px;
+		padding-bottom: 170px;
 	}
 
 	.top-tabs-nav {
@@ -987,9 +989,9 @@ button[class*='bg-slate-850']:active {
 	}
 
 	.left-utility-menu {
-		left: 8px;
-		right: 8px;
-		bottom: 132px;
+		left: 0;
+		right: 0;
+		bottom: 0 !important;
 	}
 
 	.left-utility-item {

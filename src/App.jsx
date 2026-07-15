@@ -4279,9 +4279,9 @@ export default function App() {
   };
 
   const renderLeftUtilityMenu = () => {
-    if (!user) return null;
+    if (!user || typeof document === 'undefined') return null;
 
-    return (
+    return createPortal(
       <aside className="left-utility-menu" aria-label="Snelle navigatie">
         <div className="left-utility-title">Algemeen</div>
         <button
@@ -4321,7 +4321,8 @@ export default function App() {
         >
           Uitloggen
         </button>
-      </aside>
+      </aside>,
+      document.body
     );
   };
 
