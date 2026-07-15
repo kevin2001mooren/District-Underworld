@@ -3903,7 +3903,6 @@ export default function App() {
               >
                 {activeGlobalTypingLabel && (
                   <div className="chat-typing-indicator" style={{ gridColumn: '1 / -1', fontSize: '11px', color: '#475569' }}>
-                    <span>{activeGlobalTypingLabel} </span>
                     <span className="chat-typing-dots" aria-label="is aan het typen">
                       <span />
                       <span />
