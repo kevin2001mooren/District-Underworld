@@ -139,6 +139,12 @@ export default function App() {
   const chatUserRolesRef = useRef({});
   const forceChatBottomRef = useRef(false);
   const isChatWidgetOpenRef = useRef(false);
+  const isPrivateChatWindowOpenRef = useRef(false);
+  const activePrivateConversationKeyRef = useRef('');
+  const privateBlockedUserIdsRef = useRef([]);
+  const privateHiddenConversationKeysRef = useRef([]);
+  const isGlobalChatWindowOpenRef = useRef(false);
+  const chatWidgetTabRef = useRef('live');
   const lastCloudNetworkLogAtRef = useRef(0);
   const chatProfileRequestIdRef = useRef(0);
   const privateMessageIdsRef = useRef(new Set());
@@ -719,6 +725,30 @@ export default function App() {
   }, [isChatWidgetOpen]);
 
   useEffect(() => {
+    isPrivateChatWindowOpenRef.current = isPrivateChatWindowOpen;
+  }, [isPrivateChatWindowOpen]);
+
+  useEffect(() => {
+    activePrivateConversationKeyRef.current = getPrivateConversationKey(activePrivateConversationKey);
+  }, [activePrivateConversationKey]);
+
+  useEffect(() => {
+    privateBlockedUserIdsRef.current = normalizeIdList(privateBlockedUserIds);
+  }, [privateBlockedUserIds]);
+
+  useEffect(() => {
+    privateHiddenConversationKeysRef.current = normalizeIdList(privateHiddenConversationKeys);
+  }, [privateHiddenConversationKeys]);
+
+  useEffect(() => {
+    isGlobalChatWindowOpenRef.current = isGlobalChatWindowOpen;
+  }, [isGlobalChatWindowOpen]);
+
+  useEffect(() => {
+    chatWidgetTabRef.current = chatWidgetTab;
+  }, [chatWidgetTab]);
+
+  useEffect(() => {
     if (!user?.id) {
       setPrivateMessages([]);
       setPrivateContacts([]);
@@ -842,7 +872,7 @@ export default function App() {
         const isParticipant = senderId === ownId || recipientId === ownId;
         if (!isParticipant) return;
         if (privateMessageIdsRef.current.has(messageId)) return;
-        if (recipientId === ownId && isPrivateActorBlocked(senderId)) return;
+        if (recipientId === ownId && privateBlockedUserIdsRef.current.includes(senderId)) return;
 
         const createdAt = payload?.createdAt || new Date().toISOString();
         const incomingMessage = {
@@ -856,7 +886,7 @@ export default function App() {
         };
 
         const conversationKey = getPrivateConversationKey(recipientId === ownId ? senderId : recipientId);
-        if (conversationKey && privateHiddenConversationKeys.includes(conversationKey)) {
+        if (conversationKey && privateHiddenConversationKeysRef.current.includes(conversationKey)) {
           setPrivateHiddenConversationKeys((prev) => prev.filter((entry) => entry !== conversationKey));
         }
 
@@ -876,7 +906,9 @@ export default function App() {
 
         const isIncoming = recipientId === ownId && senderId !== ownId;
         const incomingConversationKey = getPrivateConversationKey(senderId);
-        const isOpenAndActive = isPrivateChatWindowOpen && activePrivateConversationKey === incomingConversationKey;
+        const isOpenAndActive =
+          isPrivateChatWindowOpenRef.current &&
+          activePrivateConversationKeyRef.current === incomingConversationKey;
         if (!isIncoming || !incomingConversationKey || isOpenAndActive) return;
 
         setPrivateUnreadByConversation((prev) => ({
@@ -892,7 +924,7 @@ export default function App() {
         if (!senderId || senderId === ownId) return;
         if (recipientId !== ownId) return;
         if (!conversationKey) return;
-        if (isPrivateActorBlocked(senderId)) return;
+        if (privateBlockedUserIdsRef.current.includes(senderId)) return;
 
         setPrivateTypingByConversation((prev) => ({ ...prev, [conversationKey]: senderName }));
         const existingTimeout = privateTypingTimeoutsRef.current[conversationKey];
@@ -919,7 +951,7 @@ export default function App() {
       privateTypingTimeoutsRef.current = {};
       setPrivateTypingByConversation({});
     };
-  }, [user?.id, privateBlockedUserIds, privateHiddenConversationKeys, isPrivateChatWindowOpen, activePrivateConversationKey]);
+  }, [user?.id]);
 
   useEffect(() => {
     if (!user?.id) return;
@@ -941,11 +973,11 @@ export default function App() {
           if (!isParticipant) return;
 
           const conversationKey = getPrivateConversationKey(recipientId === ownId ? senderId : recipientId);
-          if (recipientId === ownId && isPrivateActorBlocked(senderId)) {
+          if (recipientId === ownId && privateBlockedUserIdsRef.current.includes(senderId)) {
             return;
           }
 
-          if (conversationKey && privateHiddenConversationKeys.includes(conversationKey)) {
+          if (conversationKey && privateHiddenConversationKeysRef.current.includes(conversationKey)) {
             setPrivateHiddenConversationKeys((prev) => prev.filter((entry) => entry !== conversationKey));
           }
 
@@ -964,7 +996,9 @@ export default function App() {
 
           const isIncoming = recipientId === ownId && senderId !== ownId;
           const incomingConversationKey = getPrivateConversationKey(senderId);
-          const isOpenAndActive = isPrivateChatWindowOpen && activePrivateConversationKey === incomingConversationKey;
+          const isOpenAndActive =
+            isPrivateChatWindowOpenRef.current &&
+            activePrivateConversationKeyRef.current === incomingConversationKey;
           if (!isIncoming || !incomingConversationKey || isOpenAndActive) return;
 
           setPrivateUnreadByConversation((prev) => ({
@@ -978,7 +1012,7 @@ export default function App() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [user?.id, isPrivateChatWindowOpen, activePrivateConversationKey, privateBlockedUserIds, privateHiddenConversationKeys]);
+  }, [user?.id]);
 
   useEffect(() => {
     if (!activePrivateConversationKey) return;
@@ -1199,10 +1233,13 @@ export default function App() {
     }
   };
 
-  const refreshPrivateChatData = async () => {
+  const refreshPrivateChatData = async (options = {}) => {
+    const silent = Boolean(options?.silent);
     if (!user?.id) return;
-    setPrivateChatLoading(true);
-    setPrivateChatError('');
+    if (!silent) {
+      setPrivateChatLoading(true);
+      setPrivateChatError('');
+    }
     try {
       const [messagesResult, contactsResult, readsResult] = await Promise.all([
         supabase
@@ -1211,12 +1248,14 @@ export default function App() {
           .or(`recipient_id.eq.${user.id},sender_id.eq.${user.id}`)
           .order('created_at', { ascending: false })
           .limit(300),
-        supabase
-          .from('player_stats')
-          .select('id, username, role')
-          .neq('id', user.id)
-          .order('username', { ascending: true })
-          .limit(600),
+        silent
+          ? Promise.resolve({ data: null, error: null })
+          : supabase
+            .from('player_stats')
+            .select('id, username, role')
+            .neq('id', user.id)
+            .order('username', { ascending: true })
+            .limit(600),
         supabase
           .from('private_message_reads')
           .select('conversation_key, last_read_at')
@@ -1276,17 +1315,33 @@ export default function App() {
       setPrivateUnreadByConversation(unreadMap);
       writePrivateReadsCache(user.id, readsMap);
       privateMessageIdsRef.current = new Set(messages.map((entry) => String(entry?.id || '').trim()).filter(Boolean));
-      setPrivateContacts((contactsResult.data || []).map((entry) => ({
-        ...entry,
-        role: normalizeRole(entry?.role)
-      })));
+      if (!silent) {
+        setPrivateContacts((contactsResult.data || []).map((entry) => ({
+          ...entry,
+          role: normalizeRole(entry?.role)
+        })));
+      }
     } catch (error) {
       const text = String(error?.message || 'onbekende fout');
-      setPrivateChatError(`Privechat laden mislukt: ${text}`);
+      if (!silent) {
+        setPrivateChatError(`Privechat laden mislukt: ${text}`);
+      }
     } finally {
-      setPrivateChatLoading(false);
+      if (!silent) {
+        setPrivateChatLoading(false);
+      }
     }
   };
+
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const interval = setInterval(() => {
+      void refreshPrivateChatData({ silent: true });
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [user?.id]);
 
   const persistPrivateConversationRead = async (conversationKey, readAtValue = null) => {
     const key = getPrivateConversationKey(conversationKey);
@@ -1545,6 +1600,24 @@ export default function App() {
         content,
         created_at: sentAt
       };
+
+      try {
+        await privateTypingChannelRef.current?.send({
+          type: 'broadcast',
+          event: 'private-message',
+          payload: {
+            id: localEchoId,
+            senderId: String(user.id),
+            senderUsername: senderName,
+            recipientId: finalRecipientId,
+            recipientUsername,
+            content,
+            createdAt: sentAt
+          }
+        });
+      } catch (_broadcastError) {
+        // Broadcast is best-effort; DB insert already succeeded.
+      }
 
       privateMessageIdsRef.current.add(localEchoId);
       setPrivateMessages((prev) => {
@@ -3947,8 +4020,22 @@ export default function App() {
                         onClick={() => openPrivateConversation(conversation)}
                         style={{ background: 'transparent', border: 0, padding: 0, textAlign: 'left', display: 'grid', gap: '3px' }}
                       >
-                        <div style={{ fontSize: '12px', fontWeight: 700 }}>
-                          {conversation.actorName}{unreadCount > 0 ? ` (${unreadCount})` : ''}{isBlocked ? ' [Ignored]' : ''}
+                        <div style={{ fontSize: '12px', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                          <span>{conversation.actorName}</span>
+                          {unreadCount > 0 ? (
+                            <span
+                              aria-label="Ongelezen priveberichten"
+                              title="Ongelezen priveberichten"
+                              style={{
+                                width: '8px',
+                                height: '8px',
+                                borderRadius: '999px',
+                                background: '#ef4444',
+                                boxShadow: '0 0 0 1px rgba(127,29,29,0.65)'
+                              }}
+                            />
+                          ) : null}
+                          {isBlocked ? <span>[Ignored]</span> : null}
                         </div>
                         <div style={{ fontSize: '11px', color: '#6b7280' }}>{conversation.lastText || '(geen inhoud)'}</div>
                       </button>
@@ -4088,7 +4175,22 @@ export default function App() {
             }}
             className={`px-2.5 py-1.5 text-xs rounded border whitespace-nowrap ${isChatWidgetOpen && isGlobalChatWindowOpen && activeChannel === 'live' ? 'border-emerald-600 bg-emerald-900/40 text-emerald-200' : 'border-slate-700 bg-slate-900 text-slate-200 hover:bg-slate-800'}`}
           >
-            Global{chatUnreadCount > 0 ? ` (${chatUnreadCount})` : ''}
+            <span style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+              Global
+              {chatUnreadCount > 0 ? (
+                <span
+                  aria-label="Ongelezen berichten"
+                  title="Ongelezen berichten"
+                  style={{
+                    width: '8px',
+                    height: '8px',
+                    borderRadius: '999px',
+                    background: '#ef4444',
+                    boxShadow: '0 0 0 1px rgba(127,29,29,0.65)'
+                  }}
+                />
+              ) : null}
+            </span>
           </button>
 
           <button
@@ -4125,7 +4227,22 @@ export default function App() {
             data-chat-popover-toggle="conversations"
             className={`px-2.5 py-1.5 text-xs rounded border whitespace-nowrap ${isChatConversationsMenuOpen ? 'border-cyan-600 bg-cyan-900/40 text-cyan-200' : 'border-slate-700 bg-slate-900 text-slate-200 hover:bg-slate-800'}`}
           >
-            Gesprekken{unreadPrivateTotal > 0 ? ` (${unreadPrivateTotal})` : ''}
+            <span style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+              Gesprekken
+              {unreadPrivateTotal > 0 ? (
+                <span
+                  aria-label="Ongelezen priveberichten"
+                  title="Ongelezen priveberichten"
+                  style={{
+                    width: '8px',
+                    height: '8px',
+                    borderRadius: '999px',
+                    background: '#ef4444',
+                    boxShadow: '0 0 0 1px rgba(127,29,29,0.65)'
+                  }}
+                />
+              ) : null}
+            </span>
           </button>
 
           {openPrivateConversationKeys.map((conversationKey) => {
@@ -4161,7 +4278,22 @@ export default function App() {
                   className={`px-2 py-1.5 text-xs rounded border whitespace-nowrap ${isActive ? 'border-emerald-600 bg-emerald-900/40 text-emerald-200' : 'border-slate-700 bg-slate-900 text-slate-200 hover:bg-slate-800'}`}
                   title={conversation.actorName}
                 >
-                  {conversation.actorName}{unreadCount > 0 ? ` (${unreadCount})` : ''}
+                  <span style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                    {conversation.actorName}
+                    {unreadCount > 0 ? (
+                      <span
+                        aria-label="Ongelezen priveberichten"
+                        title="Ongelezen priveberichten"
+                        style={{
+                          width: '8px',
+                          height: '8px',
+                          borderRadius: '999px',
+                          background: '#ef4444',
+                          boxShadow: '0 0 0 1px rgba(127,29,29,0.65)'
+                        }}
+                      />
+                    ) : null}
+                  </span>
                 </button>
                 <button
                   type="button"
@@ -4609,7 +4741,14 @@ export default function App() {
           void ensureChatUserRole(incoming?.username);
 
           const incomingIsOwn = isOwnChatMessage(incoming);
-          if (!isChatWidgetOpenRef.current && !incomingIsOwn) {
+          const activeChannel = ['live', 'trade', 'faction'].includes(chatWidgetTabRef.current)
+            ? chatWidgetTabRef.current
+            : 'live';
+          const isGlobalLiveVisible =
+            isChatWidgetOpenRef.current &&
+            isGlobalChatWindowOpenRef.current &&
+            activeChannel === 'live';
+          if (!isGlobalLiveVisible && !incomingIsOwn) {
             setChatUnreadCount((prev) => prev + 1);
           }
 
@@ -4639,7 +4778,7 @@ export default function App() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [user, currentView]);
+  }, [user]);
 
   useEffect(() => {
     const container = chatScrollRef.current;
