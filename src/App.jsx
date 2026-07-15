@@ -981,7 +981,11 @@ export default function App() {
       .on('broadcast', { event: 'private-typing' }, ({ payload }) => {
         const senderId = String(payload?.senderId || '').trim();
         const recipientId = String(payload?.recipientId || '').trim();
-        const conversationKey = getPrivateConversationKey(payload?.conversationKey || senderId);
+        const payloadConversationKey = getPrivateConversationKey(payload?.conversationKey);
+        const conversationKey =
+          payloadConversationKey && payloadConversationKey !== ownId
+            ? payloadConversationKey
+            : getPrivateConversationKey(senderId);
         const senderName = formatDisplayUsername(payload?.senderName || 'Speler');
         if (!senderId || senderId === ownId) return;
         if (recipientId !== ownId) return;
