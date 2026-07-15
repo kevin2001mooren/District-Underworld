@@ -104,6 +104,7 @@ export default function App() {
   const [chatUseBubbles, setChatUseBubbles] = useState(true);
   const [chatShowAvatars, setChatShowAvatars] = useState(true);
   const [chatUnreadCount, setChatUnreadCount] = useState(0);
+  const [globalTypingByChannel, setGlobalTypingByChannel] = useState({});
   const [privateMessages, setPrivateMessages] = useState([]);
   const [privateContacts, setPrivateContacts] = useState([]);
   const [privateChatLoading, setPrivateChatLoading] = useState(false);
@@ -148,7 +149,12 @@ export default function App() {
   const lastCloudNetworkLogAtRef = useRef(0);
   const chatProfileRequestIdRef = useRef(0);
   const privateMessageIdsRef = useRef(new Set());
+  const globalTypingChannelRef = useRef(null);
+  const globalTypingChannelReadyRef = useRef(false);
+  const globalTypingTimeoutsRef = useRef({});
+  const globalTypingSentAtRef = useRef({});
   const privateTypingChannelRef = useRef(null);
+  const privateTypingChannelReadyRef = useRef(false);
   const privateTypingTimeoutsRef = useRef({});
   const privateTypingSentAtRef = useRef({});
   const recoveryAnchorRef = useRef({
@@ -375,6 +381,58 @@ export default function App() {
 
     return () => clearInterval(interval);
   }, [stats?.jail_until, jailTime]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const typingChannel = supabase
+      .channel('global-chat-typing', {
+        config: {
+          broadcast: {
+            ack: true,
+            self: false
+          }
+        }
+      })
+      .on('broadcast', { event: 'chat-typing' }, ({ payload }) => {
+        const senderId = String(payload?.senderId || '').trim();
+        if (!senderId || senderId === String(user.id || '')) return;
+
+        const channelKey = ['live', 'trade', 'faction'].includes(payload?.channelKey)
+          ? payload.channelKey
+          : 'live';
+        const senderName = formatDisplayUsername(payload?.senderName || 'Speler');
+
+        setGlobalTypingByChannel((prev) => ({ ...prev, [channelKey]: senderName }));
+
+        const existingTimeout = globalTypingTimeoutsRef.current[channelKey];
+        if (existingTimeout) {
+          clearTimeout(existingTimeout);
+        }
+        globalTypingTimeoutsRef.current[channelKey] = setTimeout(() => {
+          setGlobalTypingByChannel((prev) => {
+            const next = { ...prev };
+            delete next[channelKey];
+            return next;
+          });
+          delete globalTypingTimeoutsRef.current[channelKey];
+        }, 2200);
+      })
+      .subscribe((status) => {
+        globalTypingChannelReadyRef.current = status === 'SUBSCRIBED';
+      });
+
+    globalTypingChannelRef.current = typingChannel;
+
+    return () => {
+      supabase.removeChannel(typingChannel);
+      globalTypingChannelRef.current = null;
+      globalTypingChannelReadyRef.current = false;
+      Object.values(globalTypingTimeoutsRef.current).forEach((timeoutHandle) => clearTimeout(timeoutHandle));
+      globalTypingTimeoutsRef.current = {};
+      setGlobalTypingByChannel({});
+    };
+  }, [user?.id]);
 
   useEffect(() => {
     if (!user) return;
@@ -750,6 +808,7 @@ export default function App() {
 
   useEffect(() => {
     if (!user?.id) {
+      setGlobalTypingByChannel({});
       setPrivateMessages([]);
       setPrivateContacts([]);
       setOpenPrivateConversationKeys([]);
@@ -762,6 +821,9 @@ export default function App() {
       setPrivateChatInput('');
       setPrivateChatError('');
       privateMessageIdsRef.current = new Set();
+      globalTypingSentAtRef.current = {};
+      Object.values(globalTypingTimeoutsRef.current).forEach((timeoutHandle) => clearTimeout(timeoutHandle));
+      globalTypingTimeoutsRef.current = {};
       privateTypingSentAtRef.current = {};
       return;
     }
@@ -940,13 +1002,16 @@ export default function App() {
           delete privateTypingTimeoutsRef.current[conversationKey];
         }, 2200);
       })
-      .subscribe();
+      .subscribe((status) => {
+        privateTypingChannelReadyRef.current = status === 'SUBSCRIBED';
+      });
 
     privateTypingChannelRef.current = channel;
 
     return () => {
       supabase.removeChannel(channel);
       privateTypingChannelRef.current = null;
+      privateTypingChannelReadyRef.current = false;
       Object.values(privateTypingTimeoutsRef.current).forEach((timeoutHandle) => clearTimeout(timeoutHandle));
       privateTypingTimeoutsRef.current = {};
       setPrivateTypingByConversation({});
@@ -1405,16 +1470,64 @@ export default function App() {
     privateTypingSentAtRef.current[conversationKey] = now;
 
     try {
-      await channel.send({
-        type: 'broadcast',
-        event: 'private-typing',
-        payload: {
-          senderId: String(user.id),
-          senderName: stats?.username || user?.email?.split('@')[0] || 'Onbekend',
-          recipientId,
-          conversationKey
-        }
-      });
+      const payload = {
+        senderId: String(user.id),
+        senderName: stats?.username || user?.email?.split('@')[0] || 'Onbekend',
+        recipientId,
+        conversationKey
+      };
+
+      const sendOnce = async () => {
+        return channel.send({
+          type: 'broadcast',
+          event: 'private-typing',
+          payload
+        });
+      };
+
+      let sendResult = await sendOnce();
+      if (sendResult !== 'ok') {
+        await new Promise((resolve) => setTimeout(resolve, privateTypingChannelReadyRef.current ? 120 : 260));
+        sendResult = await sendOnce();
+      }
+    } catch (_error) {
+      // Typing indicator is best-effort only.
+    }
+  };
+
+  const sendGlobalTypingSignal = async (channelKey, draftValue = '') => {
+    const channel = globalTypingChannelRef.current;
+    if (!channel || !user?.id) return;
+
+    const normalizedChannel = ['live', 'trade', 'faction'].includes(channelKey) ? channelKey : 'live';
+    const text = String(draftValue || '').trim();
+    if (!text) return;
+
+    const now = Date.now();
+    const lastSentAt = Number(globalTypingSentAtRef.current[normalizedChannel] || 0);
+    if (now - lastSentAt < 900) return;
+    globalTypingSentAtRef.current[normalizedChannel] = now;
+
+    try {
+      const payload = {
+        senderId: String(user.id),
+        senderName: stats?.username || user?.email?.split('@')[0] || 'Onbekend',
+        channelKey: normalizedChannel
+      };
+
+      const sendOnce = async () => {
+        return channel.send({
+          type: 'broadcast',
+          event: 'chat-typing',
+          payload
+        });
+      };
+
+      let sendResult = await sendOnce();
+      if (sendResult !== 'ok') {
+        await new Promise((resolve) => setTimeout(resolve, globalTypingChannelReadyRef.current ? 120 : 260));
+        sendResult = await sendOnce();
+      }
     } catch (_error) {
       // Typing indicator is best-effort only.
     }
@@ -3544,6 +3657,7 @@ export default function App() {
     const activeTypingLabel = selectedPrivateConversation
       ? (privateTypingByConversation[selectedPrivateConversation.key] || '')
       : '';
+    const activeGlobalTypingLabel = globalTypingByChannel[activeChannel] || '';
     const normalizedConversationSearch = privateConversationSearchTerm.trim().toLowerCase();
     const searchableContacts = (privateContacts || [])
       .map((entry) => ({
@@ -3787,10 +3901,24 @@ export default function App() {
                 onSubmit={handleSendChatMessage}
                 style={{ borderTop: '1px solid #b8b8b8', padding: '8px', display: 'grid', gridTemplateColumns: '1fr auto', gap: '6px', background: '#d9d9d9' }}
               >
+                {activeGlobalTypingLabel && (
+                  <div className="chat-typing-indicator" style={{ gridColumn: '1 / -1', fontSize: '11px', color: '#475569' }}>
+                    <span>{activeGlobalTypingLabel} </span>
+                    <span className="chat-typing-dots" aria-label="is aan het typen">
+                      <span />
+                      <span />
+                      <span />
+                    </span>
+                  </div>
+                )}
                 <input
                   type="text"
                   value={chatInput}
-                  onChange={(e) => setChatInput(e.target.value)}
+                  onChange={(e) => {
+                    const nextValue = e.target.value;
+                    setChatInput(nextValue);
+                    void sendGlobalTypingSignal(activeChannel, nextValue);
+                  }}
                   onKeyDown={handleChatInputKeyDown}
                   placeholder={activeChannel === 'live' ? 'Type your message here...' : 'Kanaal nog in opbouw'}
                   maxLength={280}
@@ -3888,8 +4016,13 @@ export default function App() {
 
               <div style={{ borderTop: '1px solid #b8b8b8', padding: '8px', display: 'grid', gridTemplateColumns: '1fr auto', gap: '6px', background: '#d9d9d9' }}>
                 {activeTypingLabel && (
-                  <div style={{ gridColumn: '1 / -1', fontSize: '11px', color: '#475569' }}>
-                    {activeTypingLabel} is aan het typen...
+                  <div className="chat-typing-indicator" style={{ gridColumn: '1 / -1', fontSize: '11px', color: '#475569' }}>
+                    <span>{activeTypingLabel} </span>
+                    <span className="chat-typing-dots" aria-label="is aan het typen">
+                      <span />
+                      <span />
+                      <span />
+                    </span>
                   </div>
                 )}
                 <input
