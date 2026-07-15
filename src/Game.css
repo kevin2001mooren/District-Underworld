@@ -883,10 +883,10 @@ button[class*='bg-slate-850']:active {
 		position: fixed;
 		left: 10px;
 		right: 10px;
-		bottom: 10px;
+		bottom: 136px;
 		top: auto;
 		width: auto;
-		z-index: 400;
+		z-index: 10005;
 		border-radius: 0.9rem;
 		border: 1px solid #3b3b3b;
 		background: linear-gradient(180deg, #181818 0%, #111111 100%);
@@ -913,14 +913,16 @@ button[class*='bg-slate-850']:active {
 	}
 
 	.app-with-left-utility > main {
-		padding-bottom: 86px;
+		padding-bottom: 210px;
 	}
 
 	.top-tabs-nav {
-		display: flex;
-		overflow-x: auto;
-		gap: 0.5rem;
-		scrollbar-width: none;
+		display: grid;
+		grid-template-columns: repeat(4, minmax(0, 1fr));
+		gap: 0.42rem;
+		padding-left: 0.5rem;
+		padding-right: 0.5rem;
+		overflow: visible;
 	}
 
 	.top-tabs-nav::-webkit-scrollbar {
@@ -928,13 +930,17 @@ button[class*='bg-slate-850']:active {
 	}
 
 	.top-tabs-nav > * {
-		flex: 0 0 auto;
-		min-width: 120px;
+		min-width: 0;
 	}
 
 	.top-tab-btn {
-		font-size: 14px;
-		padding: 0.5rem 0.7rem;
+		width: 100% !important;
+		min-width: 0;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		font-size: 12px;
+		padding: 0.48rem 0.42rem;
 	}
 
 	.pm-page-title {
@@ -980,8 +986,29 @@ button[class*='bg-slate-850']:active {
 		max-width: 100%;
 	}
 
+	.left-utility-menu {
+		left: 8px;
+		right: 8px;
+		bottom: 132px;
+	}
+
+	.left-utility-item {
+		font-size: 11px;
+		padding: 0.58rem 0.22rem;
+	}
+
 	.header-mobile-tight {
 		padding-left: 0.9rem;
 		padding-right: 0.9rem;
+	}
+
+	.top-tabs-nav {
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+		gap: 0.36rem;
+	}
+
+	.top-tab-btn {
+		font-size: 11px;
+		padding: 0.45rem 0.35rem;
 	}
 }
