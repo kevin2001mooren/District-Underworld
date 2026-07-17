@@ -1903,7 +1903,6 @@ export default function App() {
       setCurrentView('member-profile');
     };
 
-    // Zorg dat iedere chatnaam direct opent, ook als DB tijdelijk traag is.
     openFallbackProfile();
 
     try {
@@ -1921,7 +1920,6 @@ export default function App() {
       let resolvedProfile = (Array.isArray(data) ? data[0] : null) || null;
 
       if (!resolvedProfile) {
-        // Extra fallback: brede DB scan + exacte genormaliseerde vergelijking.
         const { data: scanData, error: scanError } = await supabase
           .from('player_stats')
           .select('*')
@@ -2085,15 +2083,15 @@ export default function App() {
       const ok = response.ok && String(result?.success || '').toLowerCase() === 'true';
 
       if (!ok) {
-        throw new Error(result?.message || 'Automatisch verzenden is mislukt.');
+        throw new Error(result?.message || 'Verzenden is mislukt.');
       }
 
-        showActionNotice('Je helpdeskverzoek is automatisch verzonden.', 'success', true);
+        showActionNotice('Je helpdeskverzoek is verzonden.', 'success', true);
         setHelpdeskLastSentKey(requestKey);
       setHelpdeskSubject('');
       setHelpdeskMessage('');
     } catch (error) {
-      showActionNotice(`Automatisch verzenden mislukt: ${error?.message || 'onbekende fout'}`, 'error');
+      showActionNotice(`Verzenden mislukt: ${error?.message || 'onbekende fout'}`, 'error');
     } finally {
       setHelpdeskSending(false);
     }
