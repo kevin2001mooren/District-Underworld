@@ -5,7 +5,7 @@ import { createClient } from '@supabase/supabase-js';
 import { Shield, Skull, Zap, Swords, Coins, User, Lock, Loader2, Award, Clock } from 'lucide-react';
 const SUPABASE_URL = "https://utqwbqymcbgoqunpjfff.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InV0cXdicXltY2Jnb3F1bnBqZmZmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMTAyMTUsImV4cCI6MjA5ODc4NjIxNX0.jirvlYKUSSmXDT-OC50zOR5TKVYEwT8NFAIFOBGhxSY";
-const APP_PUBLIC_URL = "https://district-underworld.vercel.app/";
+const APP_PUBLIC_URL = "https://district-underworld.com/";
 const DEFAULT_MALE_PROFILE_PHOTO = '/default-male-profile.jpeg';
 const DEFAULT_FEMALE_PROFILE_PHOTO = '/default-female-profile.jpeg';
 const DEFAULT_OTHER_PROFILE_PHOTO = '/default-other-profile.jpeg';
