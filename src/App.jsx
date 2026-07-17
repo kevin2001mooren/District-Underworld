@@ -2100,12 +2100,56 @@ export default function App() {
   };
 
   const getChatSettingsStorageKey = (playerId) => `district-underworld-chat-widget-settings-${playerId}`;
+  const getRecoveryAnchorStorageKey = (playerId) => `district-underworld-recovery-anchor-${playerId}`;
   const getPrivateBlockedStorageKey = (playerId) => `district-underworld-private-blocked-${playerId}`;
   const getPrivateHiddenStorageKey = (playerId) => `district-underworld-private-hidden-${playerId}`;
   const getPrivateReadsStorageKey = (playerId) => `district-underworld-private-reads-${playerId}`;
   const getPrivateOpenTabsStorageKey = (playerId) => `district-underworld-private-open-tabs-${playerId}`;
   const getPrivateActiveTabStorageKey = (playerId) => `district-underworld-private-active-tab-${playerId}`;
   const getPrivateWindowOpenStorageKey = (playerId) => `district-underworld-private-window-open-${playerId}`;
+
+  const readRecoveryAnchorCache = (playerId) => {
+    if (!playerId) return null;
+    try {
+      const raw = window.localStorage.getItem(getRecoveryAnchorStorageKey(playerId));
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      const energyMs = Number(parsed?.energyMs || 0);
+      const nerveMs = Number(parsed?.nerveMs || 0);
+      if (!Number.isFinite(energyMs) || !Number.isFinite(nerveMs)) return null;
+      return {
+        userId: String(parsed?.userId || playerId),
+        energyMs,
+        nerveMs,
+        lastEnergy: Number.isFinite(Number(parsed?.lastEnergy)) ? Number(parsed.lastEnergy) : null,
+        lastNerve: Number.isFinite(Number(parsed?.lastNerve)) ? Number(parsed.lastNerve) : null,
+        lastMaxEnergy: Number.isFinite(Number(parsed?.lastMaxEnergy)) ? Number(parsed.lastMaxEnergy) : null,
+        lastMaxNerve: Number.isFinite(Number(parsed?.lastMaxNerve)) ? Number(parsed.lastMaxNerve) : null
+      };
+    } catch (_error) {
+      return null;
+    }
+  };
+
+  const writeRecoveryAnchorCache = (playerId, anchor) => {
+    if (!playerId || !anchor) return;
+    try {
+      window.localStorage.setItem(
+        getRecoveryAnchorStorageKey(playerId),
+        JSON.stringify({
+          userId: String(anchor.userId || playerId),
+          energyMs: Number(anchor.energyMs) || Date.now(),
+          nerveMs: Number(anchor.nerveMs) || Date.now(),
+          lastEnergy: anchor.lastEnergy,
+          lastNerve: anchor.lastNerve,
+          lastMaxEnergy: anchor.lastMaxEnergy,
+          lastMaxNerve: anchor.lastMaxNerve
+        })
+      );
+    } catch (_error) {
+      // Local cache is best-effort only.
+    }
+  };
 
   const readPrivateReadsCache = (playerId) => {
     if (!playerId) return {};
@@ -2301,7 +2345,7 @@ export default function App() {
   }, [user?.id]);
 
   useEffect(() => {
-    if (!user?.id || !stats) return;
+    if (!user?.id || !stats || stats.id !== user.id) return;
 
     const nowMs = Date.now();
     const statsLastUpdatedMs = new Date(stats.last_updated || nowMs).getTime();
@@ -2316,7 +2360,17 @@ export default function App() {
     const isNewUser = anchor.userId !== user.id;
 
     if (isNewUser) {
-      recoveryAnchorRef.current = {
+      const cachedAnchor = readRecoveryAnchorCache(user.id);
+      const nextAnchor = cachedAnchor && cachedAnchor.userId === user.id
+        ? {
+          ...cachedAnchor,
+          userId: user.id,
+          lastEnergy: currentEnergy,
+          lastNerve: currentNerve,
+          lastMaxEnergy: currentMaxEnergy,
+          lastMaxNerve: currentMaxNerve
+        }
+        : {
         userId: user.id,
         energyMs: fallbackMs,
         nerveMs: fallbackMs,
@@ -2325,6 +2379,9 @@ export default function App() {
         lastMaxEnergy: currentMaxEnergy,
         lastMaxNerve: currentMaxNerve
       };
+
+      recoveryAnchorRef.current = nextAnchor;
+      writeRecoveryAnchorCache(user.id, nextAnchor);
       return;
     }
 
@@ -2350,6 +2407,7 @@ export default function App() {
     anchor.lastNerve = currentNerve;
     anchor.lastMaxEnergy = currentMaxEnergy;
     anchor.lastMaxNerve = currentMaxNerve;
+    writeRecoveryAnchorCache(user.id, anchor);
   }, [user?.id, stats]);
 
   const handleProfilePhotoFileChange = (event) => {
@@ -4764,7 +4822,7 @@ export default function App() {
   }, [currentView, user]);
 
   useEffect(() => {
-    if (!stats || !user) return;
+    if (!stats || !user || stats.id !== user.id) return;
 
     let isSyncing = false;
 
@@ -4812,6 +4870,8 @@ export default function App() {
       if (!nerveAtCap && nerveGain > 0) {
         recoveryAnchorRef.current.nerveMs = nerveAnchorMs + (nerveGain * NERVE_RECOVERY_INTERVAL_SECONDS * 1000);
       }
+
+      writeRecoveryAnchorCache(user.id, recoveryAnchorRef.current);
 
       isSyncing = true;
       try {
