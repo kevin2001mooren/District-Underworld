@@ -383,7 +383,7 @@ export default function App() {
   }, [stats?.jail_until, jailTime]);
 
   useEffect(() => {
-    if (!user?.id) return;
+    if (!user?.id || !stats || stats.id !== user.id) return;
 
     const typingChannel = supabase
       .channel('global-chat-typing', {
@@ -432,7 +432,7 @@ export default function App() {
       globalTypingTimeoutsRef.current = {};
       setGlobalTypingByChannel({});
     };
-  }, [user?.id]);
+  }, [user?.id, stats?.id]);
 
   useEffect(() => {
     if (!user) return;
