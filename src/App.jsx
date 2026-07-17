@@ -94,6 +94,8 @@ export default function App() {
   const [chatSending, setChatSending] = useState(false);
   const [chatDeletingId, setChatDeletingId] = useState(null);
   const [chatDeleteHoverId, setChatDeleteHoverId] = useState(null);
+  const [chatReportMenuOpenId, setChatReportMenuOpenId] = useState(null);
+  const [chatReportingId, setChatReportingId] = useState(null);
   const [chatUserRoles, setChatUserRoles] = useState({});
   const [isChatWidgetOpen, setIsChatWidgetOpen] = useState(false);
   const [chatWidgetTab, setChatWidgetTab] = useState('live');
@@ -287,8 +289,13 @@ export default function App() {
   const isMissingTableError = (error, tableName) => {
     const message = String(error?.message || '').toLowerCase();
     const target = String(tableName || '').toLowerCase();
+    const missingTablePattern =
+      message.includes('does not exist') ||
+      message.includes('could not find the table') ||
+      (message.includes('schema cache') && message.includes('table'));
+
     return (
-      message.includes('does not exist') &&
+      missingTablePattern &&
       (message.includes(`relation \"${target}\"`) || message.includes(target))
     );
   };
@@ -383,7 +390,7 @@ export default function App() {
   }, [stats?.jail_until, jailTime]);
 
   useEffect(() => {
-    if (!user?.id || !stats || stats.id !== user.id) return;
+    if (!user?.id) return;
 
     const typingChannel = supabase
       .channel('global-chat-typing', {
@@ -432,7 +439,7 @@ export default function App() {
       globalTypingTimeoutsRef.current = {};
       setGlobalTypingByChannel({});
     };
-  }, [user?.id, stats?.id]);
+  }, [user?.id]);
 
   useEffect(() => {
     if (!user) return;
@@ -1836,6 +1843,120 @@ export default function App() {
     }
   };
 
+  const handleReportChatMessage = async (message, reason = 'ongepast', reportSource = 'global') => {
+    if (!user?.id || !message?.id || chatReportingId) return;
+
+    const normalizedReason = String(reason || '').trim().toLowerCase() || 'ongepast';
+    const normalizedReportSource = String(reportSource || '').trim().toLowerCase() === 'private' ? 'private' : 'global';
+    const reportSourceLabel = normalizedReportSource === 'private' ? 'Prive chat' : 'Global chat';
+    const messageSenderName = String(
+      message?.username ||
+      message?.sender_username ||
+      message?.recipient_username ||
+      'Onbekend'
+    ).trim() || 'Onbekend';
+    const reporterName = (stats?.username || user?.email?.split('@')[0] || 'Onbekend').trim();
+
+    setChatReportingId(message.id);
+    setChatReportMenuOpenId(null);
+
+    let savedInDatabase = false;
+    try {
+      if (normalizedReportSource === 'global') {
+        const payloadCandidates = [
+          {
+            message_id: message.id,
+            reported_by_user_id: user.id,
+            reason: normalizedReason,
+            created_at: new Date().toISOString()
+          },
+          {
+            message_id: message.id,
+            reporter_id: user.id,
+            reason: normalizedReason,
+            created_at: new Date().toISOString()
+          },
+          {
+            message_id: message.id,
+            reason: normalizedReason
+          }
+        ];
+
+        for (const payload of payloadCandidates) {
+          const { error } = await supabase.from('message_reports').insert([payload]);
+
+          if (!error) {
+            savedInDatabase = true;
+            break;
+          }
+
+          if (isMissingTableError(error, 'message_reports')) {
+            break;
+          }
+
+          const payloadKeys = Object.keys(payload);
+          const isMissingAnyPayloadColumn = payloadKeys.some((columnName) =>
+            isMissingColumnError(error, 'message_reports', columnName)
+          );
+
+          if (isMissingAnyPayloadColumn) {
+            continue;
+          }
+
+          throw error;
+        }
+      }
+
+      if (!savedInDatabase) {
+        const reportSubject = `Melding ${reportSourceLabel} (${normalizedReason}), ${reporterName} meldt ${messageSenderName}`;
+        const reportBody = [
+          'Nieuwe melding van chatbericht',
+          '',
+          `Kanaal: ${reportSourceLabel}`,
+          `Reden: ${normalizedReason}`,
+          `Gemeld door: ${reporterName}`,
+          `Melder user ID: ${user.id}`,
+          `Bericht ID: ${message.id}`,
+          `Afzender bericht: ${messageSenderName}`,
+          `Tijdstip bericht: ${message.created_at || 'onbekend'}`,
+          '',
+          'Berichtinhoud:',
+          String(message.content || '(leeg)').slice(0, 1200)
+        ].join('\n');
+
+        const response = await fetch(HELPDESK_SUBMIT_ENDPOINT, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json'
+          },
+          body: JSON.stringify({
+            name: reporterName,
+            email: user?.email || `${reporterName.replace(/\s+/g, '.').toLowerCase()}@district-underworld.invalid`,
+            subject: reportSubject,
+            _subject: `[District Report] ${reportSubject}`,
+            message: reportBody,
+            _captcha: 'false',
+            _template: 'table'
+          })
+        });
+
+        const result = await response.json().catch(() => null);
+        const ok = response.ok && String(result?.success || '').toLowerCase() === 'true';
+        if (!ok) {
+          throw new Error(result?.message || 'Kon melding niet versturen.');
+        }
+      }
+
+      showActionNotice('Bericht is gemeld. Bedankt.', 'success');
+    } catch (error) {
+      addLog(` Bericht melden mislukt: ${error?.message || 'onbekende fout'}`, 'error');
+      showActionNotice(`Bericht melden mislukt: ${error?.message || 'onbekende fout'}`, 'error');
+    } finally {
+      setChatReportingId(null);
+    }
+  };
+
   const handleChatInputKeyDown = (event) => {
     if (event.key !== 'Enter') return;
     event.preventDefault();
@@ -2260,7 +2381,7 @@ export default function App() {
   }, [currentView]);
 
   useEffect(() => {
-    if (!user?.id) return;
+    if (!user?.id || !stats || stats.id !== user.id) return;
 
     const heartbeatPresence = async () => {
       const nowIso = new Date().toISOString();
@@ -2298,7 +2419,7 @@ export default function App() {
     }, PRESENCE_HEARTBEAT_INTERVAL_MS);
 
     return () => clearInterval(interval);
-  }, [user?.id]);
+  }, [user?.id, stats?.id]);
 
   useEffect(() => {
     if (!user?.id || !stats) return;
@@ -3850,9 +3971,17 @@ export default function App() {
                     const nameStyle = isSystemMessage ? undefined : roleNameColorStyle(chatRole);
                     const canOpenProfile = !isSystemMessage;
                     const canDeleteMessage = userRole === 'admin';
+                    const canReportMessage = !isSystemMessage && !ownMessage;
+                    const isReportMenuOpen = chatReportMenuOpenId === message.id;
+                    const isMessageHovered = chatDeleteHoverId === message.id;
 
                     return (
-                      <div key={message.id} style={{ marginBottom: '8px', borderRadius: '6px', border: '1px solid #e5e7eb', background: '#ffffff', padding: '6px 8px' }}>
+                      <div
+                        key={message.id}
+                        style={{ marginBottom: '8px', borderRadius: '6px', border: '1px solid #e5e7eb', background: '#ffffff', padding: '6px 8px' }}
+                        onMouseEnter={() => setChatDeleteHoverId(message.id)}
+                        onMouseLeave={() => setChatDeleteHoverId(null)}
+                      >
                         <div style={{ fontSize: '12px', lineHeight: 1.35, color: '#111827' }}>
                           <span style={{ color: '#6b7280', marginRight: '6px' }}>[{formatChatTimestamp(message.created_at)}]</span>
                           {canOpenProfile ? (
@@ -3877,22 +4006,82 @@ export default function App() {
                           )}
                           <span style={{ marginLeft: '6px' }}>{message.content}</span>
                         </div>
-                        {canDeleteMessage && (
-                          <div style={{ marginTop: '4px' }}>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                void handleDeleteChatMessage(message.id);
-                              }}
-                              onMouseEnter={() => setChatDeleteHoverId(message.id)}
-                              onMouseLeave={() => setChatDeleteHoverId(null)}
-                              onFocus={() => setChatDeleteHoverId(message.id)}
-                              onBlur={() => setChatDeleteHoverId(null)}
-                              disabled={chatDeletingId === message.id}
-                              style={{ fontSize: '10px', border: '1px solid #fca5a5', borderRadius: '4px', padding: '1px 5px', background: '#fee2e2', color: '#7f1d1d' }}
-                            >
-                              {chatDeletingId === message.id ? '...' : 'X'}
-                            </button>
+                        {(canDeleteMessage || canReportMessage) && (
+                          <div style={{ marginTop: '4px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px' }}>
+                            <div>
+                              {canReportMessage && (isMessageHovered || isReportMenuOpen || chatReportingId === message.id) && (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setChatReportMenuOpenId((prev) => (prev === message.id ? null : message.id));
+                                    }}
+                                    disabled={chatReportingId === message.id}
+                                    style={{
+                                      fontSize: '8px',
+                                      border: '1px solid transparent',
+                                      borderRadius: '4px',
+                                      padding: '0 3px',
+                                      background: 'transparent',
+                                      color: '#94a3b8',
+                                      opacity: chatReportingId === message.id
+                                        ? 0.7
+                                        : (isReportMenuOpen || isMessageHovered ? 0.62 : 0.2),
+                                      transition: 'opacity 120ms ease, color 120ms ease'
+                                    }}
+                                    title="Meld dit bericht"
+                                  >
+                                    {chatReportingId === message.id ? '...' : 'meld'}
+                                  </button>
+                                  {isReportMenuOpen && chatReportingId !== message.id && (
+                                    <div style={{ marginTop: '4px', display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          void handleReportChatMessage(message, 'spam');
+                                        }}
+                                        style={{ fontSize: '10px', border: '1px solid #cbd5e1', borderRadius: '4px', padding: '1px 5px', background: '#ffffff', color: '#334155' }}
+                                      >
+                                        Spam
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          void handleReportChatMessage(message, 'beledigend');
+                                        }}
+                                        style={{ fontSize: '10px', border: '1px solid #cbd5e1', borderRadius: '4px', padding: '1px 5px', background: '#ffffff', color: '#334155' }}
+                                      >
+                                        Beledigend
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => setChatReportMenuOpenId(null)}
+                                        style={{ fontSize: '10px', border: '1px solid #e2e8f0', borderRadius: '4px', padding: '1px 5px', background: '#f8fafc', color: '#64748b' }}
+                                      >
+                                        Sluit
+                                      </button>
+                                    </div>
+                                  )}
+                                </>
+                              )}
+                            </div>
+                            {canDeleteMessage && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  void handleDeleteChatMessage(message.id);
+                                }}
+                                onMouseEnter={() => setChatDeleteHoverId(message.id)}
+                                onMouseLeave={() => setChatDeleteHoverId(null)}
+                                onFocus={() => setChatDeleteHoverId(message.id)}
+                                onBlur={() => setChatDeleteHoverId(null)}
+                                disabled={chatDeletingId === message.id}
+                                style={{ fontSize: '10px', border: '1px solid #fca5a5', borderRadius: '4px', padding: '1px 5px', background: '#fee2e2', color: '#7f1d1d' }}
+                                title="Verwijder bericht"
+                              >
+                                {chatDeletingId === message.id ? '...' : 'X'}
+                              </button>
+                            )}
                           </div>
                         )}
                       </div>
@@ -3996,6 +4185,9 @@ export default function App() {
                 ) : (
                   selectedPrivateMessages.map((message) => {
                     const fromSelf = String(message?.sender_id || '').trim() === ownId;
+                    const canReportPrivateMessage = !fromSelf;
+                    const isPrivateReportMenuOpen = chatReportMenuOpenId === message.id;
+                    const isPrivateMessageHovered = chatDeleteHoverId === message.id;
                     return (
                       <div
                         key={message.id}
@@ -4006,11 +4198,72 @@ export default function App() {
                           background: fromSelf ? '#dcfce7' : '#ffffff',
                           padding: '6px 8px'
                         }}
+                        onMouseEnter={() => setChatDeleteHoverId(message.id)}
+                        onMouseLeave={() => setChatDeleteHoverId(null)}
                       >
                         <div style={{ fontSize: '11px', color: '#6b7280', marginBottom: '2px' }}>
                           {fromSelf ? 'Jij' : selectedPrivateConversation.actorName} [{formatChatTimestamp(message.created_at)}]
                         </div>
                         <div style={{ fontSize: '12px', color: '#111827', lineHeight: 1.35 }}>{message.content}</div>
+                        {canReportPrivateMessage && (
+                          <div style={{ marginTop: '4px' }}>
+                            {(isPrivateMessageHovered || isPrivateReportMenuOpen || chatReportingId === message.id) && (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setChatReportMenuOpenId((prev) => (prev === message.id ? null : message.id));
+                                  }}
+                                  disabled={chatReportingId === message.id}
+                                  style={{
+                                    fontSize: '8px',
+                                    border: '1px solid transparent',
+                                    borderRadius: '4px',
+                                    padding: '0 3px',
+                                    background: 'transparent',
+                                    color: '#94a3b8',
+                                    opacity: chatReportingId === message.id
+                                      ? 0.7
+                                      : (isPrivateReportMenuOpen || isPrivateMessageHovered ? 0.62 : 0.2),
+                                    transition: 'opacity 120ms ease, color 120ms ease'
+                                  }}
+                                  title="Meld dit bericht"
+                                >
+                                  {chatReportingId === message.id ? '...' : 'meld'}
+                                </button>
+                                {isPrivateReportMenuOpen && chatReportingId !== message.id && (
+                                  <div style={{ marginTop: '4px', display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        void handleReportChatMessage(message, 'spam', 'private');
+                                      }}
+                                      style={{ fontSize: '10px', border: '1px solid #cbd5e1', borderRadius: '4px', padding: '1px 5px', background: '#ffffff', color: '#334155' }}
+                                    >
+                                      Spam
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        void handleReportChatMessage(message, 'beledigend', 'private');
+                                      }}
+                                      style={{ fontSize: '10px', border: '1px solid #cbd5e1', borderRadius: '4px', padding: '1px 5px', background: '#ffffff', color: '#334155' }}
+                                    >
+                                      Beledigend
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setChatReportMenuOpenId(null)}
+                                      style={{ fontSize: '10px', border: '1px solid #e2e8f0', borderRadius: '4px', padding: '1px 5px', background: '#f8fafc', color: '#64748b' }}
+                                    >
+                                      Sluit
+                                    </button>
+                                  </div>
+                                )}
+                              </>
+                            )}
+                          </div>
+                        )}
                       </div>
                     );
                   })
