@@ -4069,13 +4069,13 @@ export default function App() {
                           padding: '6px 8px'
                         }}
                       >
-                        <div style={{ fontSize: '11px', color: '#6b7280', marginBottom: '2px' }}>
+                        <div style={{ fontSize: '12px', color: '#111827', lineHeight: 1.35 }}>
                           <span style={{ color: '#6b7280', marginRight: '6px' }}>[{formatChatTimestamp(message.created_at)}]</span>
                           <span style={{ ...nameStyle, fontWeight: 600 }}>
                             {fromSelf ? 'Jij' : selectedPrivateConversation.actorName}:
                           </span>
+                          <span style={{ marginLeft: '6px' }}>{message.content}</span>
                         </div>
-                        <div style={{ fontSize: '12px', color: '#111827', lineHeight: 1.35 }}>{message.content}</div>
                       </div>
                     );
                   })
