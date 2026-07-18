@@ -3713,6 +3713,9 @@ export default function App() {
       ? privateMessages
         .filter((message) => getPrivateConversationFromMessage(message, ownId).key === selectedPrivateConversation.key)
       : [];
+    const selectedPrivateActorRole = normalizeRole(
+      privateContacts.find((entry) => String(entry?.id || '').trim() === String(selectedPrivateConversation?.actorId || '').trim())?.role
+    );
     const unreadPrivateTotal = Object.values(privateUnreadByConversation).reduce((sum, value) => sum + (Number(value) || 0), 0);
     const activeTypingLabel = selectedPrivateConversation
       ? (privateTypingByConversation[selectedPrivateConversation.key] || '')
@@ -4052,6 +4055,9 @@ export default function App() {
                 ) : (
                   selectedPrivateMessages.map((message) => {
                     const fromSelf = String(message?.sender_id || '').trim() === ownId;
+                    const nameStyle = fromSelf
+                      ? roleNameColorStyle(userRole)
+                      : roleNameColorStyle(selectedPrivateActorRole);
                     return (
                       <div
                         key={message.id}
@@ -4064,7 +4070,10 @@ export default function App() {
                         }}
                       >
                         <div style={{ fontSize: '11px', color: '#6b7280', marginBottom: '2px' }}>
-                          {fromSelf ? 'Jij' : selectedPrivateConversation.actorName} [{formatChatTimestamp(message.created_at)}]
+                          <span style={{ color: '#6b7280', marginRight: '6px' }}>[{formatChatTimestamp(message.created_at)}]</span>
+                          <span style={{ ...nameStyle, fontWeight: 600 }}>
+                            {fromSelf ? 'Jij' : selectedPrivateConversation.actorName}:
+                          </span>
                         </div>
                         <div style={{ fontSize: '12px', color: '#111827', lineHeight: 1.35 }}>{message.content}</div>
                       </div>
