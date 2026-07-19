@@ -76,6 +76,7 @@ export default function App() {
   const [adminLoading, setAdminLoading] = useState(false);
   const [adminActionLoadingId, setAdminActionLoadingId] = useState(null);
   const [adminCashInputs, setAdminCashInputs] = useState({});
+  const [adminJailInputs, setAdminJailInputs] = useState({});
   const [adminSearchTerm, setAdminSearchTerm] = useState('');
   const [membersSearchTerm, setMembersSearchTerm] = useState('');
   const [membersLoadError, setMembersLoadError] = useState('');
@@ -3555,10 +3556,23 @@ export default function App() {
           throw new Error('Alleen admins en moderators mogen iemand opsluiten.');
         }
 
+        const rawJailSeconds = String(payload?.seconds ?? '').trim();
+        const jailSeconds = rawJailSeconds
+          ? Math.floor(Number(rawJailSeconds.replace(/\D/g, '')))
+          : ADMIN_JAIL_SECONDS;
+
+        if (!Number.isFinite(jailSeconds) || jailSeconds < 1) {
+          throw new Error('Voer een geldige celduur in (minimaal 1 seconde).');
+        }
+
+        if (jailSeconds > 86400) {
+          throw new Error('Maximale celduur is 86400 seconden (24 uur).');
+        }
+
         if (member.id === user?.id) {
-          const selfJailUntil = new Date(Date.now() + ADMIN_JAIL_SECONDS * 1000).toISOString();
+          const selfJailUntil = new Date(Date.now() + jailSeconds * 1000).toISOString();
           await updateDB({ jail_until: selfJailUntil });
-          const message = ` Admin: je zit ${ADMIN_JAIL_SECONDS} sec in de cel.`;
+          const message = ` Admin: je zit ${jailSeconds} sec in de cel.`;
           showAdminNotice(message, 'success');
           addLog(message, 'jail');
           await refreshAdminMembers();
@@ -3567,7 +3581,7 @@ export default function App() {
 
         const { error } = await supabase.rpc('admin_apply_action', {
           p_target_id: member.id,
-          p_action: `jail:${ADMIN_JAIL_SECONDS}`
+          p_action: `jail:${jailSeconds}`
         });
 
         if (error) {
@@ -3578,7 +3592,7 @@ export default function App() {
             rpcMessage.includes('jail');
 
           if (jailActionMissing) {
-            const jailUntil = new Date(Date.now() + ADMIN_JAIL_SECONDS * 1000).toISOString();
+            const jailUntil = new Date(Date.now() + jailSeconds * 1000).toISOString();
             const { data: fallbackUpdated, error: fallbackError } = await supabase
               .from('player_stats')
               .update({ jail_until: jailUntil })
@@ -3615,7 +3629,7 @@ export default function App() {
           throw new Error('Jail actie lijkt niet opgeslagen. Voeg jail support toe in admin_apply_action of controleer RLS update policy.');
         }
 
-        const message = ` Admin: ${formatDisplayUsername(member.username)} zit ${ADMIN_JAIL_SECONDS} sec in de cel.`;
+        const message = ` Admin: ${formatDisplayUsername(member.username)} zit ${jailSeconds} sec in de cel.`;
         showAdminNotice(message, 'success');
         addLog(message, 'jail');
       }
@@ -4897,6 +4911,14 @@ export default function App() {
   }, [stats, user]);
 
   useEffect(() => {
+    if (!user?.id || !stats || stats.id !== user.id) return;
+    if (jailTime <= 0) return;
+    if (currentView === 'prison' || currentView === 'helpdesk' || currentView === 'information' || currentView === 'admin' || currentView === 'game') return;
+
+    setCurrentView('prison');
+  }, [user?.id, stats, currentView, jailTime]);
+
+  useEffect(() => {
     if (currentView !== 'prison' || jailTime <= 0) {
       setPrisonActionWarning('');
     }
@@ -5443,13 +5465,23 @@ export default function App() {
                         >
                           Herstel
                         </button>
-                        <button
-                          onClick={() => performAdminAction(member, 'jail')}
-                          disabled={adminActionLoadingId === member.id || !canJail}
-                          className="staff-btn staff-btn-rank"
-                        >
-                          Cel 60s
-                        </button>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            value={adminJailInputs[member.id] ?? String(ADMIN_JAIL_SECONDS)}
+                            onChange={(e) => setAdminJailInputs((prev) => ({ ...prev, [member.id]: e.target.value.replace(/\D/g, '') }))}
+                            className="w-20 bg-slate-900 border border-slate-800 rounded-lg px-2 py-1 text-xs text-slate-200 focus:outline-none focus:border-rose-500 transition"
+                            placeholder="sec"
+                          />
+                          <button
+                            onClick={() => performAdminAction(member, 'jail', { seconds: adminJailInputs[member.id] ?? String(ADMIN_JAIL_SECONDS) })}
+                            disabled={adminActionLoadingId === member.id || !canJail}
+                            className="staff-btn staff-btn-rank"
+                          >
+                            Cel
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -6233,7 +6265,17 @@ if (currentView === 'information') {
       <main ref={dashboardScrollRef} className="flex-grow grid grid-cols-1 lg:grid-cols-12 gap-6 p-6 overflow-y-auto">
         {/* STATS & ACTIONS (Left 5 Cols) */}
         <section className="lg:col-span-5 flex flex-col gap-6">
-
+            {/* JAIL BANNER */}
+          {jailTime > 0 && (
+            <div className="bg-red-950/40 border border-red-800/40 rounded-2xl p-4 flex items-center gap-4">
+              <Clock className="h-8 w-8 text-red-500 animate-spin" />
+              <div>
+                <h4 className="text-red-400 font-bold">Je zit in de gevangenis!</h4>
+                <p className="text-xs text-red-300/80">Straftijd over: {jailTime} seconden. Alle acties zijn gevangenis-gebonden.</p>
+              </div>
+            </div>
+          )}
+          
           {/* STATS CARD */}
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl relative overflow-hidden">
             <div className="absolute top-0 right-0 w-32 h-32 bg-rose-500/5 rounded-full blur-2xl"></div>
