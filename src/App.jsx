@@ -3115,6 +3115,10 @@ export default function App() {
 
   const handleRescueBuyout = async (target) => {
     if (!stats || !user) return;
+    if (jailTime > 0) {
+      showActionNotice('Je kunt geen andere speler helpen terwijl je zelf in de gevangenis zit.', 'error');
+      return addLog(' Je kunt geen andere speler helpen terwijl je zelf in de gevangenis zit.', 'error');
+    }
     const remaining = getRemainingJailSeconds(target.jail_until);
     if (remaining <= 0) {
       showActionNotice('Deze speler is al vrij.', 'error');
@@ -3182,6 +3186,10 @@ export default function App() {
 
   const handleRescueEscape = async (target) => {
     if (!stats || !user) return;
+    if (jailTime > 0) {
+      showActionNotice('Je kunt geen andere speler helpen terwijl je zelf in de gevangenis zit.', 'error');
+      return addLog(' Je kunt geen andere speler helpen terwijl je zelf in de gevangenis zit.', 'error');
+    }
     const remaining = getRemainingJailSeconds(target.jail_until);
     if (remaining <= 0) {
       showActionNotice('Deze speler is al vrij.', 'error');
@@ -5948,14 +5956,14 @@ export default function App() {
                           <div className="flex items-center gap-2">
                             <button
                               onClick={() => handleRescueBuyout(member)}
-                              disabled={prisonActionLoadingId === member.id || remaining <= 0}
+                              disabled={jailTime > 0 || prisonActionLoadingId === member.id || remaining <= 0}
                               className="px-2 py-1 rounded-lg text-xs border border-slate-800 bg-slate-900 hover:bg-slate-800 text-slate-200 disabled:opacity-50 disabled:cursor-not-allowed"
                             >
                               Vrijkopen (${rescueCost.toLocaleString()})
                             </button>
                             <button
                               onClick={() => handleRescueEscape(member)}
-                              disabled={prisonActionLoadingId === member.id || remaining <= 0}
+                              disabled={jailTime > 0 || prisonActionLoadingId === member.id || remaining <= 0}
                               className="px-2 py-1 rounded-lg text-xs border border-slate-800 bg-slate-900 hover:bg-slate-800 text-slate-200 disabled:opacity-50 disabled:cursor-not-allowed"
                             >
                               Uitbreken ({rescueChance}%)
