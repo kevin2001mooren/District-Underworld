@@ -3197,25 +3197,8 @@ export default function App() {
     try {
       setPrisonActionLoadingId(target.id);
 
-      const { data, error } = await supabase.rpc('prison_help_player', {
-        p_target_id: target.id,
-        p_action: 'escape'
-      });
-
-      if (!error) {
-        const rpcMessage = data?.message || `Uitbraakhulp geprobeerd op ${formatDisplayUsername(target.username)}.`;
-        showActionNotice(rpcMessage, data?.escaped ? 'success' : 'jail');
-        addLog(data?.message || ` Uitbraakhulp geprobeerd op ${formatDisplayUsername(target.username)}.`, data?.escaped ? 'success' : 'jail');
-        await refreshPrisonMembers();
-        await fetchPlayerStats(user);
-        return;
-      }
-
-      if (!isMissingPrisonRpc(error)) {
-        throw error;
-      }
-
-      // Fallback voor oude setup zonder prison_help_player RPC.
+      // Gebruik client-side flow zodat mislukte hulp altijd de helper straft,
+      // ongeacht wat een oudere RPC implementatie doet.
       const rescueChance = calculateRescueChance(remaining);
       const escaped = Math.random() < rescueChance;
       await updateDB({ nerve: Math.max(0, currentNerve - PRISON_RESCUE_NERVE_COST) });
@@ -3242,28 +3225,13 @@ export default function App() {
         addLog(` Uitbraakhulp gelukt! ${formatDisplayUsername(target.username)} is vrij.`, 'success');
       } else {
         const extraSeconds = Math.floor(Math.random() * 21) + 20;
-        const targetBase = new Date(target.jail_until).getTime();
-        const updatedJailUntil = new Date(targetBase + extraSeconds * 1000).toISOString();
+        const helperBase = stats.jail_until ? new Date(stats.jail_until).getTime() : Date.now();
+        const helperJailUntil = new Date(helperBase + extraSeconds * 1000).toISOString();
 
-        const { data: updatedTarget, error: updateError } = await supabase
-          .from('player_stats')
-          .update({ jail_until: updatedJailUntil })
-          .eq('id', target.id)
-          .select('id')
-          .maybeSingle();
+        await updateDB({ jail_until: helperJailUntil });
 
-        if (updateError) {
-          await updateDB({ nerve: currentNerve });
-          throw updateError;
-        }
-
-        if (!updatedTarget) {
-          await updateDB({ nerve: currentNerve });
-          throw new Error('Uitbraakhulp geblokkeerd door RLS policy op player_stats.');
-        }
-
-        showActionNotice(`Uitbraakhulp mislukt. Straf van ${formatDisplayUsername(target.username)} +${extraSeconds} sec.`, 'jail');
-        addLog(` Uitbraakhulp mislukt. Straf van ${formatDisplayUsername(target.username)} +${extraSeconds} sec.`, 'jail');
+        showActionNotice(`Uitbraakhulp mislukt. Jij bent gepakt en zit ${extraSeconds} sec vast.`, 'jail');
+        addLog(` Uitbraakhulp mislukt. Jij bent gepakt en zit ${extraSeconds} sec vast.`, 'jail');
       }
 
       await refreshPrisonMembers();
@@ -6382,18 +6350,6 @@ if (currentView === 'information') {
               </div>
             </div>
           </div>
-
-          {/* JAIL BANNER */}
-          {jailTime > 0 && (
-            <div className="bg-red-950/40 border border-red-800/40 rounded-2xl p-4 flex items-center gap-4">
-              <Clock className="h-8 w-8 text-red-500 animate-spin" />
-              <div>
-                <h4 className="text-red-400 font-bold">Je zit in de gevangenis!</h4>
-                <p className="text-xs text-red-300/80">Straftijd over: {jailTime} seconden. Alle acties zijn gevangenis-gebonden.</p>
-              </div>
-            </div>
-          )}
-
         </section>
 
         {/* GAME LOGS (Right 7 Cols) */}
