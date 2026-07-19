@@ -25,9 +25,15 @@ const PRISON_BRIBE_COST_PER_SECOND = 75;
 const PRISON_ESCAPE_NERVE_COST = 5;
 const PRISON_ESCAPE_SUCCESS_CHANCE = 0.35;
 const PRISON_RESCUE_NERVE_COST = 5;
+const PICKPOCKET_FAIL_LIFE_LOSS_MIN = 2;
+const PICKPOCKET_FAIL_LIFE_LOSS_MAX = 6;
+const HEIST_FAIL_LIFE_LOSS_MIN = 8;
+const HEIST_FAIL_LIFE_LOSS_MAX = 18;
+const HOSPITAL_HEAL_COST_PER_LIFE = 140;
 const ADMIN_JAIL_SECONDS = 60;
 const ENERGY_RECOVERY_INTERVAL_SECONDS = 60;
 const NERVE_RECOVERY_INTERVAL_SECONDS = 300;
+const LIFE_RECOVERY_INTERVAL_SECONDS = 180;
 const CASH_INTEGER_MAX = 2147483647;
 const CHAT_MAX_VISIBLE_LINES = 20;
 const CHAT_LINE_HEIGHT = 1.45;
@@ -86,7 +92,7 @@ export default function App() {
   const [prisonLoading, setPrisonLoading] = useState(false);
   const [prisonActionLoadingId, setPrisonActionLoadingId] = useState(null);
   const [prisonActionWarning, setPrisonActionWarning] = useState('');
-  const [recoveryTimers, setRecoveryTimers] = useState({ energy: null, nerve: null });
+  const [recoveryTimers, setRecoveryTimers] = useState({ energy: null, nerve: null, life: null });
   const [actionNotice, setActionNotice] = useState(null);
   const [adminNotice, setAdminNotice] = useState(null);
   const [chatMessages, setChatMessages] = useState([]);
@@ -158,14 +164,18 @@ export default function App() {
   const privateTypingChannelReadyRef = useRef(false);
   const privateTypingTimeoutsRef = useRef({});
   const privateTypingSentAtRef = useRef({});
+  const lifeColumnsAvailableRef = useRef(true);
   const recoveryAnchorRef = useRef({
     userId: null,
     energyMs: Date.now(),
     nerveMs: Date.now(),
+    lifeMs: Date.now(),
     lastEnergy: null,
     lastNerve: null,
+    lastLife: null,
     lastMaxEnergy: null,
-    lastMaxNerve: null
+    lastMaxNerve: null,
+    lastMaxLife: null
   });
 
   const scrollChatToBottom = (remainingPasses = 4) => {
@@ -570,6 +580,56 @@ export default function App() {
   };
 
   const getProfilePhotoStorageKey = (playerId) => `district-underworld-profile-photo-${playerId}`;
+  const getLifeFallbackStorageKey = (playerId) => `district-underworld-life-fallback-${playerId}`;
+
+  const readLifeFallback = (playerId) => {
+    if (!playerId) return null;
+    try {
+      const raw = window.localStorage.getItem(getLifeFallbackStorageKey(playerId));
+      const parsed = Number(raw);
+      return Number.isFinite(parsed) ? Math.max(0, Math.round(parsed)) : null;
+    } catch (_error) {
+      return null;
+    }
+  };
+
+  const writeLifeFallback = (playerId, lifeValue) => {
+    if (!playerId) return;
+    const parsed = Number(lifeValue);
+    if (!Number.isFinite(parsed)) return;
+    try {
+      window.localStorage.setItem(getLifeFallbackStorageKey(playerId), String(Math.max(0, Math.round(parsed))));
+    } catch (_error) {
+      // Stil: localStorage kan geblokkeerd zijn.
+    }
+  };
+
+  const normalizeStatsWithLifeFallback = (sourceStats, playerId) => {
+    if (!sourceStats) return sourceStats;
+
+    const nextStats = { ...sourceStats };
+    const maxLife = Math.max(1, Number(nextStats.max_life ?? nextStats.max_hp) || 100);
+    const hasLifeColumns =
+      Object.prototype.hasOwnProperty.call(nextStats, 'life') ||
+      Object.prototype.hasOwnProperty.call(nextStats, 'hp');
+
+    if (hasLifeColumns) {
+      lifeColumnsAvailableRef.current = true;
+      const dbLifeRaw = Number(nextStats.life ?? nextStats.hp);
+      const dbLife = Number.isFinite(dbLifeRaw) ? Math.max(0, Math.min(maxLife, Math.round(dbLifeRaw))) : maxLife;
+      nextStats.life = dbLife;
+      nextStats.hp = dbLife;
+      writeLifeFallback(playerId, dbLife);
+      return nextStats;
+    }
+
+    lifeColumnsAvailableRef.current = false;
+    const cachedLife = readLifeFallback(playerId);
+    const resolvedLife = cachedLife === null ? maxLife : Math.max(0, Math.min(maxLife, cachedLife));
+    nextStats.life = resolvedLife;
+    nextStats.hp = resolvedLife;
+    return nextStats;
+  };
 
   const normalizeProfilePhotoValue = (value) => {
     const normalized = String(value || '').trim();
@@ -1279,6 +1339,17 @@ export default function App() {
     const penaltySteps = Math.floor(Math.max(0, remainingJailSeconds) / 30);
     const chance = 0.6 - penaltySteps * 0.05;
     return Math.max(0.1, Math.min(0.6, chance));
+  };
+
+  const getLifeState = (sourceStats = stats) => {
+    const maxLife = Math.max(1, Number(sourceStats?.max_life ?? sourceStats?.max_hp) || 100);
+    const rawLife = Number(sourceStats?.life ?? sourceStats?.hp);
+    const currentLife = Math.max(0, Math.min(maxLife, Number.isFinite(rawLife) ? rawLife : maxLife));
+    return { currentLife, maxLife };
+  };
+
+  const calculateHospitalHealCost = (missingLife) => {
+    return Math.max(0, Number(missingLife) || 0) * HOSPITAL_HEAL_COST_PER_LIFE;
   };
 
   const refreshChatMessages = async () => {
@@ -2115,15 +2186,19 @@ export default function App() {
       const parsed = JSON.parse(raw);
       const energyMs = Number(parsed?.energyMs || 0);
       const nerveMs = Number(parsed?.nerveMs || 0);
-      if (!Number.isFinite(energyMs) || !Number.isFinite(nerveMs)) return null;
+      const lifeMs = Number(parsed?.lifeMs || 0);
+      if (!Number.isFinite(energyMs) || !Number.isFinite(nerveMs) || !Number.isFinite(lifeMs)) return null;
       return {
         userId: String(parsed?.userId || playerId),
         energyMs,
         nerveMs,
+        lifeMs,
         lastEnergy: Number.isFinite(Number(parsed?.lastEnergy)) ? Number(parsed.lastEnergy) : null,
         lastNerve: Number.isFinite(Number(parsed?.lastNerve)) ? Number(parsed.lastNerve) : null,
+        lastLife: Number.isFinite(Number(parsed?.lastLife)) ? Number(parsed.lastLife) : null,
         lastMaxEnergy: Number.isFinite(Number(parsed?.lastMaxEnergy)) ? Number(parsed.lastMaxEnergy) : null,
-        lastMaxNerve: Number.isFinite(Number(parsed?.lastMaxNerve)) ? Number(parsed.lastMaxNerve) : null
+        lastMaxNerve: Number.isFinite(Number(parsed?.lastMaxNerve)) ? Number(parsed.lastMaxNerve) : null,
+        lastMaxLife: Number.isFinite(Number(parsed?.lastMaxLife)) ? Number(parsed.lastMaxLife) : null
       };
     } catch (_error) {
       return null;
@@ -2139,10 +2214,13 @@ export default function App() {
           userId: String(anchor.userId || playerId),
           energyMs: Number(anchor.energyMs) || Date.now(),
           nerveMs: Number(anchor.nerveMs) || Date.now(),
+          lifeMs: Number(anchor.lifeMs) || Date.now(),
           lastEnergy: anchor.lastEnergy,
           lastNerve: anchor.lastNerve,
+          lastLife: anchor.lastLife,
           lastMaxEnergy: anchor.lastMaxEnergy,
-          lastMaxNerve: anchor.lastMaxNerve
+          lastMaxNerve: anchor.lastMaxNerve,
+          lastMaxLife: anchor.lastMaxLife
         })
       );
     } catch (_error) {
@@ -2269,8 +2347,9 @@ export default function App() {
         }
 
         setUserRole(effectiveRole);
-        setStats(data);
-        calculateOfflineRecovery(data);
+        const normalizedData = normalizeStatsWithLifeFallback(data, user.id);
+        setStats(normalizedData);
+        calculateOfflineRecovery(normalizedData);
       }
     } catch (err) {
       console.error(err);
@@ -2352,8 +2431,10 @@ export default function App() {
 
     const currentEnergy = Number(stats.energy) || 0;
     const currentNerve = Number(stats.nerve) || 0;
+    const currentLife = Math.max(0, Number(stats.life ?? stats.hp) || 0);
     const currentMaxEnergy = Number(stats.max_energy) || 100;
     const currentMaxNerve = Number(stats.max_nerve) || 20;
+    const currentMaxLife = Math.max(1, Number(stats.max_life ?? stats.max_hp) || 100);
 
     const anchor = recoveryAnchorRef.current;
     const isNewUser = anchor.userId !== user.id;
@@ -2363,20 +2444,28 @@ export default function App() {
       const nextAnchor = cachedAnchor && cachedAnchor.userId === user.id
         ? {
           ...cachedAnchor,
+          energyMs: Number(cachedAnchor.energyMs) || fallbackMs,
+          nerveMs: Number(cachedAnchor.nerveMs) || fallbackMs,
+          lifeMs: Number(cachedAnchor.lifeMs) || fallbackMs,
           userId: user.id,
           lastEnergy: currentEnergy,
           lastNerve: currentNerve,
+          lastLife: currentLife,
           lastMaxEnergy: currentMaxEnergy,
-          lastMaxNerve: currentMaxNerve
+          lastMaxNerve: currentMaxNerve,
+          lastMaxLife: currentMaxLife
         }
         : {
         userId: user.id,
         energyMs: fallbackMs,
         nerveMs: fallbackMs,
+        lifeMs: fallbackMs,
         lastEnergy: currentEnergy,
         lastNerve: currentNerve,
+        lastLife: currentLife,
         lastMaxEnergy: currentMaxEnergy,
-        lastMaxNerve: currentMaxNerve
+        lastMaxNerve: currentMaxNerve,
+        lastMaxLife: currentMaxLife
       };
 
       recoveryAnchorRef.current = nextAnchor;
@@ -2402,10 +2491,21 @@ export default function App() {
       anchor.nerveMs = nowMs;
     }
 
+    const wasLifeCapped =
+      anchor.lastLife !== null &&
+      anchor.lastMaxLife !== null &&
+      anchor.lastLife >= anchor.lastMaxLife;
+    const isLifeNowBelowCap = currentLife < currentMaxLife;
+    if (wasLifeCapped && isLifeNowBelowCap) {
+      anchor.lifeMs = nowMs;
+    }
+
     anchor.lastEnergy = currentEnergy;
     anchor.lastNerve = currentNerve;
+    anchor.lastLife = currentLife;
     anchor.lastMaxEnergy = currentMaxEnergy;
     anchor.lastMaxNerve = currentMaxNerve;
+    anchor.lastMaxLife = currentMaxLife;
     writeRecoveryAnchorCache(user.id, anchor);
   }, [user?.id, stats]);
 
@@ -2723,7 +2823,7 @@ export default function App() {
       const oldUsernameLower = currentUsername.toLowerCase();
       const nextUsernameLower = nextUsernameValue.toLowerCase();
 
-      setStats(updatedUser);
+      setStats(normalizeStatsWithLifeFallback(updatedUser, user.id));
       setUsernameDraft(nextUsernameValue);
       setLoginUsername(nextUsernameValue);
       setUsernameChangeError('');
@@ -2832,14 +2932,14 @@ export default function App() {
         .single();
 
       if (!error && data) {
-        setStats(data);
+        setStats(normalizeStatsWithLifeFallback(data, currentStats.id));
         if (energyRecovery > 0 || nerveRecovery > 0) {
           addLog(` Je bent ${elapsedMinutes} minuten offline geweest!`, 'info');
           addLog(` Hersteld: +${updatedEnergy - currentStats.energy} Energie, +${updatedNerve - currentStats.nerve} Nerve.`, 'success');
         }
       }
     } else {
-      setStats(currentStats);
+      setStats(normalizeStatsWithLifeFallback(currentStats, currentStats.id));
     }
   };
 
@@ -2873,12 +2973,27 @@ export default function App() {
         payload[key] = clampInt(payload[key], 0);
       });
 
+    if (Object.prototype.hasOwnProperty.call(payload, 'life') || Object.prototype.hasOwnProperty.call(payload, 'hp')) {
+      const maxLifeForCache = Math.max(1, Number(stats?.max_life ?? stats?.max_hp) || 100);
+      const lifeCandidate = Object.prototype.hasOwnProperty.call(payload, 'life') ? payload.life : payload.hp;
+      const resolvedLife = clampInt(lifeCandidate, 0, maxLifeForCache);
+      writeLifeFallback(user.id, resolvedLife);
+    }
+
     setStats(prev => ({ ...prev, ...payload }));
+
+    const cloudPayload = { ...payload };
+    if (lifeColumnsAvailableRef.current === false) {
+      delete cloudPayload.life;
+      delete cloudPayload.hp;
+      delete cloudPayload.max_life;
+      delete cloudPayload.max_hp;
+    }
 
     const runCloudUpdate = async () => {
       return supabase
         .from('player_stats')
-        .update(payload)
+        .update(cloudPayload)
         .eq('id', user.id);
     };
 
@@ -2894,6 +3009,15 @@ export default function App() {
           continue;
         }
 
+        if (isMissingPlayerStatsColumnError(error, 'life') || isMissingPlayerStatsColumnError(error, 'hp') || isMissingPlayerStatsColumnError(error, 'max_life') || isMissingPlayerStatsColumnError(error, 'max_hp')) {
+          lifeColumnsAvailableRef.current = false;
+          delete cloudPayload.life;
+          delete cloudPayload.hp;
+          delete cloudPayload.max_life;
+          delete cloudPayload.max_hp;
+          continue;
+        }
+
         if (isLikelyNetworkFetchError(error)) {
           logCloudNetworkIssueThrottled();
           return false;
@@ -2903,6 +3027,15 @@ export default function App() {
         return false;
       } catch (err) {
         if (attempt === 1 && isLikelyNetworkFetchError(err)) {
+          continue;
+        }
+
+        if (isMissingPlayerStatsColumnError(err, 'life') || isMissingPlayerStatsColumnError(err, 'hp') || isMissingPlayerStatsColumnError(err, 'max_life') || isMissingPlayerStatsColumnError(err, 'max_hp')) {
+          lifeColumnsAvailableRef.current = false;
+          delete cloudPayload.life;
+          delete cloudPayload.hp;
+          delete cloudPayload.max_life;
+          delete cloudPayload.max_hp;
           continue;
         }
 
@@ -2997,7 +3130,15 @@ export default function App() {
       showActionNotice(message, 'success');
       addLog(message, 'success');
     } else {
-      const message = ' Mislukt! De toerist had je door en je moest met lege handen vluchten!';
+      const { currentLife } = getLifeState(stats);
+      const lifeLoss = Math.min(
+        currentLife,
+        Math.floor(Math.random() * (PICKPOCKET_FAIL_LIFE_LOSS_MAX - PICKPOCKET_FAIL_LIFE_LOSS_MIN + 1)) + PICKPOCKET_FAIL_LIFE_LOSS_MIN
+      );
+      const nextLife = Math.max(0, currentLife - lifeLoss);
+      newStats.life = nextLife;
+      newStats.hp = nextLife;
+      const message = ` Mislukt! De toerist had je door en sloeg terug. -${lifeLoss} life.`;
       showActionNotice(message, 'error');
       addLog(message, 'error');
     }
@@ -3031,20 +3172,59 @@ export default function App() {
       showActionNotice(message, 'success');
       addLog(message, 'success');
     } else {
+      const { currentLife } = getLifeState(stats);
+      const lifeLoss = Math.min(
+        currentLife,
+        Math.floor(Math.random() * (HEIST_FAIL_LIFE_LOSS_MAX - HEIST_FAIL_LIFE_LOSS_MIN + 1)) + HEIST_FAIL_LIFE_LOSS_MIN
+      );
+      const nextLife = Math.max(0, currentLife - lifeLoss);
+      newStats.life = nextLife;
+      newStats.hp = nextLife;
+
       if (Math.random() > 0.5) {
         const jailUntil = new Date(Date.now() + 60 * 1000).toISOString();
         newStats.jail_until = jailUntil;
-        const message = ' COPS! De SWAT was te snel ter plaatse. 60 seconden gevangenisstraf.';
+        const message = ` COPS! De SWAT was te snel ter plaatse. 60 seconden gevangenisstraf en -${lifeLoss} life.`;
         showActionNotice(message, 'error');
         addLog(message, 'jail');
       } else {
-        const message = ' Alarm ging af! Je bent ternauwernood ontsnapt zonder buit.';
+        const message = ` Alarm ging af! Je bent ternauwernood ontsnapt zonder buit, maar raakte gewond (-${lifeLoss} life).`;
         showActionNotice(message, 'error');
         addLog(message, 'error');
       }
     }
 
     updateDB(newStats);
+  };
+
+  const handleHospitalHeal = async () => {
+    if (!stats || !user) return;
+
+    const { currentLife, maxLife } = getLifeState(stats);
+    const missingLife = Math.max(0, maxLife - currentLife);
+    if (missingLife <= 0) {
+      const message = ' Je life is al volledig hersteld.';
+      showActionNotice(message, 'error');
+      return addLog(message, 'error');
+    }
+
+    const healCost = calculateHospitalHealCost(missingLife);
+    const currentCash = Number(stats.cash) || 0;
+    if (currentCash < healCost) {
+      const message = ` Te weinig cash voor behandeling. Nodig: $${healCost.toLocaleString()}.`;
+      showActionNotice(message, 'error');
+      return addLog(message, 'error');
+    }
+
+    await updateDB({
+      cash: currentCash - healCost,
+      life: maxLife,
+      hp: maxLife
+    });
+
+    const message = ` Behandeling geslaagd! +${missingLife} life voor $${healCost.toLocaleString()}.`;
+    showActionNotice(message, 'success');
+    addLog(message, 'success');
   };
 
   const handlePrisonBribe = async () => {
@@ -3522,9 +3702,12 @@ export default function App() {
         }
 
         if (member.id === user?.id) {
+          const selfMaxLife = Math.max(1, Number(stats?.max_life ?? stats?.max_hp) || 100);
           await updateDB({
             energy: stats?.max_energy || stats?.energy || 100,
-            nerve: stats?.max_nerve || stats?.nerve || 20
+            nerve: stats?.max_nerve || stats?.nerve || 20,
+            life: selfMaxLife,
+            hp: selfMaxLife
           });
           const message = ` Admin: ${formatDisplayUsername(member.username)} volledig hersteld.`;
           showAdminNotice(message, 'success');
@@ -3537,7 +3720,72 @@ export default function App() {
           p_target_id: member.id,
           p_action: 'recover'
         });
-        if (error) throw error;
+
+        if (error) {
+          const rpcMessage = (error.message || '').toLowerCase();
+          const recoverActionMissing =
+            rpcMessage.includes('onbekende admin actie') ||
+            (rpcMessage.includes('unknown') && rpcMessage.includes('recover'));
+
+          if (!recoverActionMissing) throw error;
+
+          const { data: fallbackTarget, error: fallbackReadError } = await supabase
+            .from('player_stats')
+            .select('max_energy, max_nerve, max_life, max_hp, energy, nerve')
+            .eq('id', member.id)
+            .maybeSingle();
+
+          if (fallbackReadError || !fallbackTarget) {
+            throw new Error('Herstelactie mislukt. Doelspeler niet gevonden of geen leesrechten.');
+          }
+
+          const fallbackMaxLife = Math.max(1, Number(fallbackTarget.max_life ?? fallbackTarget.max_hp) || 100);
+          const { data: fallbackUpdated, error: fallbackUpdateError } = await supabase
+            .from('player_stats')
+            .update({
+              energy: Number(fallbackTarget.max_energy) || Number(fallbackTarget.energy) || 100,
+              nerve: Number(fallbackTarget.max_nerve) || Number(fallbackTarget.nerve) || 20,
+              life: fallbackMaxLife,
+              hp: fallbackMaxLife
+            })
+            .eq('id', member.id)
+            .select('id')
+            .maybeSingle();
+
+          if (fallbackUpdateError || !fallbackUpdated) {
+            throw new Error('Herstelactie geblokkeerd door RLS policy. Voeg recover support toe in admin_apply_action.');
+          }
+        }
+
+        const { data: verifyTarget, error: verifyError } = await supabase
+          .from('player_stats')
+          .select('life, hp, max_life, max_hp')
+          .eq('id', member.id)
+          .maybeSingle();
+
+        if (verifyError) {
+          throw new Error('Kon herstel niet verifiren. Controleer RLS policies op player_stats.');
+        }
+
+        if (verifyTarget) {
+          const verifyMaxLife = Math.max(1, Number(verifyTarget.max_life ?? verifyTarget.max_hp) || 100);
+          const verifyLife = Math.max(0, Number(verifyTarget.life ?? verifyTarget.hp) || 0);
+
+          if (verifyLife < verifyMaxLife) {
+            const { error: topUpError } = await supabase
+              .from('player_stats')
+              .update({
+                life: verifyMaxLife,
+                hp: verifyMaxLife
+              })
+              .eq('id', member.id);
+
+            if (topUpError) {
+              throw new Error('Herstelactie gelukt, maar life kon niet volledig worden aangevuld. Controleer update policy.');
+            }
+          }
+        }
+
         const message = ` Admin: ${formatDisplayUsername(member.username)} volledig hersteld.`;
         showAdminNotice(message, 'success');
         addLog(message, 'success');
@@ -4538,7 +4786,7 @@ export default function App() {
           ? 'misdaad'
           : currentView === 'sports'
             ? 'sporten'
-            : currentView === 'prison'
+            : currentView === 'prison' || currentView === 'hospital'
               ? 'stad'
               : null;
 
@@ -4607,6 +4855,16 @@ export default function App() {
                   className="rank-menu-item"
                 >
                   Gevangenis
+                </button>
+                <button
+                  onClick={() => {
+                    setCityMenuOpen(false);
+                    setActiveTab('stad');
+                    setCurrentView('hospital');
+                  }}
+                  className="rank-menu-item"
+                >
+                  Ziekenhuis
                 </button>
               </div>
             )}
@@ -4728,6 +4986,7 @@ export default function App() {
 
     const energyTimerText = energyCurrent >= energyMax ? 'VOL' : formatCountdown(recoveryTimers.energy);
     const nerveTimerText = nerveCurrent >= nerveMax ? 'VOL' : formatCountdown(recoveryTimers.nerve);
+    const lifeTimerText = lifeCurrent >= lifeMax ? 'VOL' : formatCountdown(recoveryTimers.life);
     const profilePhoto = resolveProfilePhoto(stats, user?.id);
     const usernameLabel = stats?.username ? formatDisplayUsername(stats.username) : 'Onbekend';
     const usernameInitial = usernameLabel.charAt(0).toUpperCase() || '?';
@@ -4802,7 +5061,7 @@ export default function App() {
             <div>
               <div className="flex justify-between items-center text-xs uppercase tracking-wide text-slate-300 leading-tight">
                 <span>Life</span>
-                <span className="font-mono text-slate-400 text-xs">{lifeCurrent}/{lifeMax}</span>
+                <span className="font-mono text-slate-400 text-xs">{lifeCurrent}/{lifeMax}  {lifeTimerText}</span>
               </div>
               <div className="w-full rounded-sm mt-0.5 overflow-hidden" style={{ height: '6px', background: '#111827', border: '1px solid #374151' }}>
                 <div style={{ height: '100%', width: `${lifePercent}%`, background: 'linear-gradient(90deg, #22c55e, #16a34a)' }} />
@@ -4844,16 +5103,21 @@ export default function App() {
       const maxEnergy = Number(stats.max_energy) || 100;
       const currentNerve = Number(stats.nerve) || 0;
       const maxNerve = Number(stats.max_nerve) || 20;
+      const currentLife = Math.max(0, Number(stats.life ?? stats.hp) || 0);
+      const maxLife = Math.max(1, Number(stats.max_life ?? stats.max_hp) || 100);
 
       const nowMs = Date.now();
       const energyAnchorMs = Number(recoveryAnchorRef.current.energyMs) || nowMs;
       const nerveAnchorMs = Number(recoveryAnchorRef.current.nerveMs) || nowMs;
+      const lifeAnchorMs = Number(recoveryAnchorRef.current.lifeMs) || nowMs;
 
       const elapsedEnergySeconds = Math.max(0, Math.floor((nowMs - energyAnchorMs) / 1000));
       const elapsedNerveSeconds = Math.max(0, Math.floor((nowMs - nerveAnchorMs) / 1000));
+      const elapsedLifeSeconds = Math.max(0, Math.floor((nowMs - lifeAnchorMs) / 1000));
 
       const energyAtCap = currentEnergy >= maxEnergy;
       const nerveAtCap = currentNerve >= maxNerve;
+      const lifeAtCap = currentLife >= maxLife;
 
       const energyCountdown = energyAtCap
         ? null
@@ -4863,19 +5127,25 @@ export default function App() {
         ? null
         : NERVE_RECOVERY_INTERVAL_SECONDS - (elapsedNerveSeconds % NERVE_RECOVERY_INTERVAL_SECONDS || NERVE_RECOVERY_INTERVAL_SECONDS);
 
-      setRecoveryTimers({ energy: energyCountdown, nerve: nerveCountdown });
+      const lifeCountdown = lifeAtCap
+        ? null
+        : LIFE_RECOVERY_INTERVAL_SECONDS - (elapsedLifeSeconds % LIFE_RECOVERY_INTERVAL_SECONDS || LIFE_RECOVERY_INTERVAL_SECONDS);
 
-      if (isSyncing || (energyAtCap && nerveAtCap)) return;
+      setRecoveryTimers({ energy: energyCountdown, nerve: nerveCountdown, life: lifeCountdown });
+
+      if (isSyncing || (energyAtCap && nerveAtCap && lifeAtCap)) return;
 
       const energyGain = Math.floor(elapsedEnergySeconds / ENERGY_RECOVERY_INTERVAL_SECONDS);
       const nerveGain = Math.floor(elapsedNerveSeconds / NERVE_RECOVERY_INTERVAL_SECONDS);
+      const lifeGain = Math.floor(elapsedLifeSeconds / LIFE_RECOVERY_INTERVAL_SECONDS);
 
-      if (energyGain <= 0 && nerveGain <= 0) return;
+      if (energyGain <= 0 && nerveGain <= 0 && lifeGain <= 0) return;
 
       const nextEnergy = Math.min(maxEnergy, currentEnergy + energyGain);
       const nextNerve = Math.min(maxNerve, currentNerve + nerveGain);
+      const nextLife = Math.min(maxLife, currentLife + lifeGain);
 
-      if (nextEnergy === currentEnergy && nextNerve === currentNerve) return;
+      if (nextEnergy === currentEnergy && nextNerve === currentNerve && nextLife === currentLife) return;
 
       if (!energyAtCap && energyGain > 0) {
         recoveryAnchorRef.current.energyMs = energyAnchorMs + (energyGain * ENERGY_RECOVERY_INTERVAL_SECONDS * 1000);
@@ -4883,12 +5153,15 @@ export default function App() {
       if (!nerveAtCap && nerveGain > 0) {
         recoveryAnchorRef.current.nerveMs = nerveAnchorMs + (nerveGain * NERVE_RECOVERY_INTERVAL_SECONDS * 1000);
       }
+      if (!lifeAtCap && lifeGain > 0) {
+        recoveryAnchorRef.current.lifeMs = lifeAnchorMs + (lifeGain * LIFE_RECOVERY_INTERVAL_SECONDS * 1000);
+      }
 
       writeRecoveryAnchorCache(user.id, recoveryAnchorRef.current);
 
       isSyncing = true;
       try {
-        await updateDB({ energy: nextEnergy, nerve: nextNerve });
+        await updateDB({ energy: nextEnergy, nerve: nextNerve, life: nextLife, hp: nextLife });
       } finally {
         isSyncing = false;
       }
@@ -5830,6 +6103,77 @@ export default function App() {
               </div>
               <span className="bg-amber-550/10 text-amber-400 text-[10px] font-bold px-2 py-1 rounded font-mono border border-amber-500/20">-10 Energie</span>
             </button>
+          </div>
+        </main>
+        {renderLeftUtilityMenu()}
+        {renderLiveChatWidget()}
+      </div>
+    );
+  }
+
+  if (currentView === 'hospital') {
+    const { currentLife, maxLife } = getLifeState(stats);
+    const missingLife = Math.max(0, maxLife - currentLife);
+    const healCost = calculateHospitalHealCost(missingLife);
+    const canAffordHeal = (Number(stats?.cash) || 0) >= healCost;
+
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans app-with-left-utility">
+        <header className="bg-slate-900 border-b border-slate-800 py-4 px-6 flex flex-wrap justify-between items-center gap-4">
+          <div className="flex items-center gap-3">
+            {renderHeaderPlayerInfo()}
+          </div>
+          <div className="flex items-center gap-2">
+            {canOpenStaffPanel && (
+              <button
+                onClick={() => setCurrentView('admin')}
+                className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
+                title="Open admin functies"
+              >
+                Admin
+              </button>
+            )}
+            <button
+              onClick={() => setCurrentView('members')}
+              className="px-2 py-1 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition text-xs border border-slate-800"
+              title="Toon leden"
+            >
+              Leden
+            </button>
+          </div>
+        </header>
+
+        {renderTopTabs()}
+
+        <main className="flex-grow p-6">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl max-w-3xl mx-auto">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-4">Ziekenhuis</h3>
+
+            {actionNotice && (
+              <div className={`mb-4 rounded-xl border p-3 text-xs ${actionNotice.type === 'error' ? 'bg-red-950/30 border-red-800/40 text-red-200' : 'bg-emerald-950/30 border-emerald-800/40 text-emerald-200'}`}>
+                {actionNotice.text}
+              </div>
+            )}
+
+            <div className="bg-slate-950 border border-slate-850 rounded-xl p-4 space-y-2.5 text-sm">
+              <p className="text-slate-200 font-semibold">Welkom in het ziekenhuis.</p>
+              <p className="text-slate-400 text-xs">Herstel je life direct tegen betaling.</p>
+              <p className="text-slate-300 text-xs">Life: {currentLife}/{maxLife}</p>
+              <p className="text-slate-400 text-xs">Kosten volledige behandeling: ${healCost.toLocaleString()}</p>
+
+              <button
+                type="button"
+                onClick={() => void handleHospitalHeal()}
+                disabled={missingLife <= 0 || !canAffordHeal}
+                className="px-3 py-2 text-slate-300 rounded-lg border border-emerald-700 bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {missingLife <= 0
+                  ? 'Life is al vol'
+                  : !canAffordHeal
+                    ? 'Te weinig cash'
+                    : 'Betaal en herstel life'}
+              </button>
+            </div>
           </div>
         </main>
         {renderLeftUtilityMenu()}
