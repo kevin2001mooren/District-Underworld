@@ -3116,11 +3116,15 @@ export default function App() {
   const handleRescueBuyout = async (target) => {
     if (!stats || !user) return;
     const remaining = getRemainingJailSeconds(target.jail_until);
-    if (remaining <= 0) return addLog('Deze speler is al vrij.', 'info');
+    if (remaining <= 0) {
+      showActionNotice('Deze speler is al vrij.', 'error');
+      return addLog('Deze speler is al vrij.', 'info');
+    }
 
     const cost = calculatePrisonBribeCost(remaining);
     const currentCash = stats.cash || 0;
     if (currentCash < cost) {
+      showActionNotice(`Te weinig cash om ${formatDisplayUsername(target.username)} vrij te kopen.`, 'error');
       return addLog(` Te weinig cash om ${formatDisplayUsername(target.username)} vrij te kopen. Nodig: $${cost.toLocaleString()}.`, 'error');
     }
 
@@ -3134,6 +3138,7 @@ export default function App() {
 
       if (!error) {
         const successMessage = data?.message || ` Je hebt ${formatDisplayUsername(target.username)} vrijgekocht voor $${cost.toLocaleString()}.`;
+        showActionNotice(successMessage, 'success');
         addLog(successMessage, 'success');
         await refreshPrisonMembers();
         await fetchPlayerStats(user);
@@ -3165,8 +3170,10 @@ export default function App() {
       }
 
       addLog(` Je hebt ${formatDisplayUsername(target.username)} vrijgekocht voor $${cost.toLocaleString()}.`, 'success');
+      showActionNotice(`Je hebt ${formatDisplayUsername(target.username)} vrijgekocht voor $${cost.toLocaleString()}.`, 'success');
       await refreshPrisonMembers();
     } catch (err) {
+      showActionNotice(`Vrijkoop voor speler mislukt: ${err.message}`, 'error');
       addLog(` Vrijkoop voor speler mislukt: ${err.message}`, 'error');
     } finally {
       setPrisonActionLoadingId(null);
@@ -3176,10 +3183,14 @@ export default function App() {
   const handleRescueEscape = async (target) => {
     if (!stats || !user) return;
     const remaining = getRemainingJailSeconds(target.jail_until);
-    if (remaining <= 0) return addLog('Deze speler is al vrij.', 'info');
+    if (remaining <= 0) {
+      showActionNotice('Deze speler is al vrij.', 'error');
+      return addLog('Deze speler is al vrij.', 'info');
+    }
 
     const currentNerve = stats.nerve || 0;
     if (currentNerve < PRISON_RESCUE_NERVE_COST) {
+      showActionNotice(`Je hebt minimaal ${PRISON_RESCUE_NERVE_COST} lef nodig om iemand te helpen ontsnappen.`, 'error');
       return addLog(` Je hebt minimaal ${PRISON_RESCUE_NERVE_COST} lef nodig om iemand te helpen ontsnappen.`, 'error');
     }
 
@@ -3192,6 +3203,8 @@ export default function App() {
       });
 
       if (!error) {
+        const rpcMessage = data?.message || `Uitbraakhulp geprobeerd op ${formatDisplayUsername(target.username)}.`;
+        showActionNotice(rpcMessage, data?.escaped ? 'success' : 'jail');
         addLog(data?.message || ` Uitbraakhulp geprobeerd op ${formatDisplayUsername(target.username)}.`, data?.escaped ? 'success' : 'jail');
         await refreshPrisonMembers();
         await fetchPlayerStats(user);
@@ -3225,6 +3238,7 @@ export default function App() {
           throw new Error('Uitbraakhulp geblokkeerd door RLS policy op player_stats.');
         }
 
+        showActionNotice(`Uitbraakhulp gelukt! ${formatDisplayUsername(target.username)} is vrij.`, 'success');
         addLog(` Uitbraakhulp gelukt! ${formatDisplayUsername(target.username)} is vrij.`, 'success');
       } else {
         const extraSeconds = Math.floor(Math.random() * 21) + 20;
@@ -3248,11 +3262,13 @@ export default function App() {
           throw new Error('Uitbraakhulp geblokkeerd door RLS policy op player_stats.');
         }
 
+        showActionNotice(`Uitbraakhulp mislukt. Straf van ${formatDisplayUsername(target.username)} +${extraSeconds} sec.`, 'jail');
         addLog(` Uitbraakhulp mislukt. Straf van ${formatDisplayUsername(target.username)} +${extraSeconds} sec.`, 'jail');
       }
 
       await refreshPrisonMembers();
     } catch (err) {
+      showActionNotice(`Uitbraakhulp mislukt: ${err.message}`, 'error');
       addLog(` Uitbraakhulp mislukt: ${err.message}`, 'error');
     } finally {
       setPrisonActionLoadingId(null);
@@ -5847,7 +5863,9 @@ export default function App() {
   }
 
   if (currentView === 'prison') {
-    const rescueTargets = prisonMembers.filter((member) => member.id !== user?.id && getRemainingJailSeconds(member.jail_until) > 0);
+    const activePrisonMembers = prisonMembers.filter((member) => getRemainingJailSeconds(member.jail_until) > 0);
+    const rescueTargets = activePrisonMembers.filter((member) => member.id !== user?.id);
+    const isOnlyCurrentUserJailed = jailTime > 0 && rescueTargets.length === 0;
 
     return (
       <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans app-with-left-utility">
@@ -5881,6 +5899,12 @@ export default function App() {
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl max-w-4xl mx-auto">
             <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-4">Celstatus</h3>
 
+            {actionNotice && (
+              <div className={`mb-4 rounded-xl border p-3 text-xs ${actionNotice.type === 'error' ? 'bg-red-950/30 border-red-800/40 text-red-200' : actionNotice.type === 'jail' ? 'bg-amber-950/30 border-amber-800/40 text-amber-200' : 'bg-emerald-950/30 border-emerald-800/40 text-emerald-200'}`}>
+                {actionNotice.text}
+              </div>
+            )}
+
             {jailTime > 0 ? (
               <div className="bg-red-950/40 border border-red-800/40 rounded-xl p-4">
                 <p className="text-red-300 text-sm font-semibold">Je zit opgesloten.</p>
@@ -5889,7 +5913,12 @@ export default function App() {
             ) : (
               <div className="bg-emerald-950/30 border border-emerald-800/30 rounded-xl p-4">
                 <p className="text-emerald-300 text-sm font-semibold">Je bent vrij.</p>
-                <p className="text-emerald-200/80 text-xs mt-1">Er is op dit moment geen actieve straf.</p>
+                <p className="text-emerald-200/80 text-xs mt-1">Voor jou is er op dit moment geen actieve straf.</p>
+                {rescueTargets.length > 0 && (
+                  <p className="text-slate-300 text-xs mt-1">
+                    Er {rescueTargets.length === 1 ? 'zit' : 'zitten'} nog {rescueTargets.length} {rescueTargets.length === 1 ? 'speler' : 'spelers'} in de gevangenis.
+                  </p>
+                )}
               </div>
             )}
 
@@ -5929,7 +5958,11 @@ export default function App() {
               {prisonLoading ? (
                 <p className="text-xs text-slate-400">Gevangenen laden...</p>
               ) : rescueTargets.length === 0 ? (
-                <p className="text-xs text-slate-500">Niemand zit momenteel vast.</p>
+                <p className="text-xs text-slate-500">
+                  {isOnlyCurrentUserJailed
+                    ? 'Alleen jij zit momenteel vast.'
+                    : 'Niemand zit momenteel vast.'}
+                </p>
               ) : (
                 <div className="space-y-2.5">
                   {rescueTargets.map((member) => {
